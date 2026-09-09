@@ -7,12 +7,11 @@ Google Drive连接模块
 - DRIVE_ROOT_FOLDER_ID
 """
 
-import io
 import json
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.http import MediaFileUpload
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -45,6 +44,23 @@ class DriveManager:
             fields="files(id,name,mimeType,parents)"
         ).execute()
         return result.get("files", [])
+
+    def scan_folder_recursive(self, folder_id=None, path=""):
+        """递归扫描Drive目录，返回所有文件信息"""
+        files = []
+        current_folder = folder_id or self.folder_id
+
+        for item in self.list_drive_files(current_folder):
+            item_path = f"{path}/{item['name']}"
+            if item.get("mimeType") == "application/vnd.google-apps.folder":
+                files.extend(
+                    self.scan_folder_recursive(item["id"], item_path)
+                )
+            else:
+                item["path"] = item_path
+                files.append(item)
+
+        return files
 
     def upload_file(self, file_path, target_folder_id=None):
         if self.service is None:
