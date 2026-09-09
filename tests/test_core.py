@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
 from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
+from modules.idempotency import reconcile_posted_board
 from modules.process_parts import build_current_state, validate_new_board
 
 
@@ -41,16 +42,20 @@ class CoreWorkflowTests(unittest.TestCase):
         ws["M10"] = "通过"
         wb.save(path)
 
-    def _make_ledger(self, path: Path):
+    def _make_ledger(self, path: Path, *, completed=False, board_id=""):
         wb = Workbook()
         ws = wb.active
         ws.title = "累计加工台账"
         ws["A1"] = "正在进行加工订单"
-        ws["A6"] = "订单：D53K-1600A-0805 ｜ 加工中 ｜ 待加工 2 件 ｜ 待加工 1.515 t"
+        remaining = 0 if completed else 2
+        processed = 2 if completed else 0
+        pending_weight = 0 if completed else 1.5154425
+        status = "已完成" if completed else "未开始"
+        ws["A6"] = f"订单：D53K-1600A-0805 ｜ {'已完成' if completed else '加工中'} ｜ 待加工 {remaining} 件 ｜ 待加工 {pending_weight:.3f} t"
         headers = ["图号", "厚度(mm)", "坡口", "长(mm)", "宽(mm)", "订单总数量", "零件总重量(t)", "板材号/加工来源", "累计已加工", "当前剩余", "待加工重量(t)", "零件状态"]
         for c, value in enumerate(headers, 1):
             ws.cell(7, c, value)
-        ws.append(["D53K-1600A.1-1-13", 150, "W", 1980, 325, 2, 1.5154425, "", 0, 2, 1.5154425, "未开始"])
+        ws.append(["D53K-1600A.1-1-13", 150, "W", 1980, 325, 2, 1.5154425, f"{board_id}×2" if board_id else "", processed, remaining, pending_weight, status])
 
         f = wb.create_sheet("加工流水")
         f.append(["板材号", "拆图结果文件", "图号", "厚度(mm)", "坡口", "本张板加工数量", "数据性质", "说明"])
@@ -58,6 +63,9 @@ class CoreWorkflowTests(unittest.TestCase):
         b.append(["数据性质", "板材号", "拆图结果文件", "计入件数", "状态", "归档位置"])
         a = wb.create_sheet("异常记录")
         a.append(["板材号", "业务日期", "订单号", "图号", "厚度(mm)", "数量", "异常类型", "说明"])
+        if board_id:
+            f.append([board_id, f"{board_id}_完成.xlsx", "D53K-1600A.1-1-13", 150, "W", 2, "正式入账", "测试"])
+            b.append(["正式入账", board_id, f"{board_id}_完成.xlsx", 2, "已核验并入账", "拆图结果/已录入数量"])
         wb.save(path)
 
     def test_source_parser_kg_to_tons(self):
@@ -67,6 +75,16 @@ class CoreWorkflowTests(unittest.TestCase):
             rows = read_source_summary(path)
             self.assertEqual(rows[0]["order"], "D53K-1600A-0805")
             self.assertAlmostEqual(rows[0]["total_weight_t"], 1.5154425)
+
+    def test_existing_ledger_exposes_permanent_historical_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "ledger.xlsx"
+            self._make_ledger(path, completed=True, board_id="#309")
+            existing = read_existing_ledger(path)
+            self.assertEqual(len(existing["historical_rows"]), 1)
+            self.assertEqual(existing["historical_rows"][0]["remaining"], 0)
+            self.assertEqual(existing["historical_rows"][0]["board_sources"], "#309×2")
+            self.assertIn("#309", existing["posted_boards"])
 
     def test_split_and_d53k_unique_suffix_match(self):
         with tempfile.TemporaryDirectory() as td:
@@ -108,6 +126,28 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertEqual(result["anomaly"]["异常类型"], "阻断入账")
 
+    def test_posted_board_reconciliation_prevents_double_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            source_path = Path(td) / "source.xlsx"
+            split_path = Path(td) / "#309_完成.xlsx"
+            ledger_path = Path(td) / "ledger.xlsx"
+            self._make_source(source_path)
+            self._make_split(split_path)
+            self._make_ledger(ledger_path, completed=True, board_id="#309")
+            sources = read_source_summary(source_path)
+            payload = read_split_result(split_path, board_id="#309")
+            existing = read_existing_ledger(ledger_path)
+            recovery = reconcile_posted_board(
+                board_id="#309",
+                filename="#309_完成.xlsx",
+                split_payload=payload,
+                source_records=sources,
+                existing_flows=existing["flows"],
+                existing_board_records=existing["board_records"],
+            )
+            self.assertTrue(recovery["ok"], recovery.get("reason"))
+            self.assertEqual(recovery["expected_qty"], 2)
+
     def test_state_and_reports(self):
         with tempfile.TemporaryDirectory() as td:
             source_path = Path(td) / "source.xlsx"
@@ -131,7 +171,6 @@ class CoreWorkflowTests(unittest.TestCase):
             cwb = load_workbook(cumulative)
             self.assertEqual(set(cwb.sheetnames), {"累计加工台账", "加工流水", "板材入账记录", "异常记录"})
             pws = load_workbook(pending)["当前待加工零件"]
-            # J列当前剩余应加粗且使用部分完成黄色。
             j_cells = [c for c in pws["J"] if c.value == 1]
             self.assertTrue(j_cells)
             self.assertTrue(j_cells[0].font.bold)
