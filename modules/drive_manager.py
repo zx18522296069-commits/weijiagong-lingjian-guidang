@@ -11,7 +11,8 @@ import json
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+import io
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -33,7 +34,7 @@ class DriveManager:
         credentials = service_account.Credentials.from_service_account_info(
             info, scopes=SCOPES
         )
-        self.service = build("google", "drive", credentials=credentials)
+        self.service = build("drive", "v3", credentials=credentials)
         return self.service
 
     def list_drive_files(self, folder_id=None):
@@ -61,6 +62,19 @@ class DriveManager:
                 files.append(item)
 
         return files
+
+    def download_file(self, file_id, save_path):
+        if self.service is None:
+            self.connect()
+
+        request = self.service.files().get_media(fileId=file_id)
+        with io.FileIO(save_path, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+
+        return save_path
 
     def upload_file(self, file_path, target_folder_id=None):
         if self.service is None:
