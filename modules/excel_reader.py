@@ -114,7 +114,6 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             if not order_raw and not drawing:
                 continue
             if not order_raw:
-                # 合计、说明、厚度核对等尾部区域不属于零件明细。
                 continue
             if not drawing:
                 raise ValueError(f"原始汇总表第{r}行图号为空: {source_name or path}")
@@ -172,7 +171,6 @@ def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
             if not order_raw and not drawing:
                 continue
             if not order_raw or not drawing:
-                # 后部复核说明区不属于结构化明细。
                 continue
             split_qty = _int_number(ws.cell(r, split_qty_col).value, qty_name)
             if split_qty <= 0:
@@ -222,15 +220,22 @@ def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
 
 
 def read_existing_ledger(path) -> dict:
-    """读取正式累计台账中的当前累计、加工流水、板材入账和异常历史。"""
+    """
+    读取正式累计台账中的：
+    - 当前累计状态（用于继续累加）
+    - 主表历史零件行（用于订单源退出后永久保留已完成历史）
+    - 加工流水、板材入账、异常历史
+    """
     wb = load_workbook(path, read_only=True, data_only=True)
     if "累计加工台账" not in wb.sheetnames:
         raise ValueError("累计加工台账.xlsx 缺少“累计加工台账”工作表")
 
     state: dict[tuple, dict] = {}
+    historical_rows: list[dict] = []
     ws = wb["累计加工台账"]
     current_order = ""
     header_cols = None
+
     for r in range(1, ws.max_row + 1):
         first = _text(ws.cell(r, 1).value)
         if first.startswith("订单："):
@@ -239,31 +244,52 @@ def read_existing_ledger(path) -> dict:
             header_cols = None
             continue
         if first == "图号":
-            headers = _header_map([ws.cell(r, c).value for c in range(1, ws.max_column + 1)])
-            header_cols = headers
+            header_cols = _header_map([ws.cell(r, c).value for c in range(1, ws.max_column + 1)])
             continue
         if not current_order or not header_cols or not first:
             continue
 
-        drawing = normalize_drawing(ws.cell(r, header_cols.get("图号", 1)).value)
+        required_headers = [
+            "图号", "厚度(mm)", "坡口", "长(mm)", "宽(mm)", "订单总数量",
+            "零件总重量(t)", "累计已加工", "当前剩余", "待加工重量(t)", "零件状态",
+        ]
+        missing = [name for name in required_headers if name not in header_cols]
+        if missing:
+            raise ValueError(f"累计加工台账主表缺少正式字段: {missing}")
+
+        drawing = normalize_drawing(ws.cell(r, header_cols["图号"]).value)
         if not drawing:
             continue
-        thickness_col = header_cols.get("厚度(mm)") or header_cols.get("厚度")
-        bevel_col = header_cols.get("坡口")
-        processed_col = header_cols.get("累计已加工")
-        source_col = header_cols.get("板材号/加工来源")
-        if not all([thickness_col, bevel_col, processed_col]):
-            raise ValueError("累计加工台账主表字段结构不符合正式模板")
-        key = (
-            current_order,
-            drawing,
-            float(_number(ws.cell(r, thickness_col).value, "厚度")),
-            normalize_bevel(ws.cell(r, bevel_col).value),
-        )
-        state[key] = {
-            "processed": _int_number(ws.cell(r, processed_col).value or 0, "累计已加工"),
-            "board_sources": _text(ws.cell(r, source_col).value) if source_col else "",
-        }
+        thickness = float(_number(ws.cell(r, header_cols["厚度(mm)"]).value, "厚度"))
+        bevel = normalize_bevel(ws.cell(r, header_cols["坡口"]).value)
+        processed = _int_number(ws.cell(r, header_cols["累计已加工"]).value or 0, "累计已加工")
+        board_sources = _text(ws.cell(r, header_cols.get("板材号/加工来源", 0)).value) if header_cols.get("板材号/加工来源") else ""
+        remaining = _int_number(ws.cell(r, header_cols["当前剩余"]).value or 0, "当前剩余")
+
+        key = (current_order, drawing, thickness, bevel)
+        if key in state:
+            raise ValueError(f"累计加工台账主表存在重复业务键: {key}")
+        state[key] = {"processed": processed, "board_sources": board_sources}
+
+        historical_rows.append({
+            "order_raw": current_order,
+            "order": current_order,
+            "drawing": drawing,
+            "thickness": thickness,
+            "bevel": bevel,
+            "length": _number(ws.cell(r, header_cols["长(mm)"]).value, "长(mm)"),
+            "width": _number(ws.cell(r, header_cols["宽(mm)"]).value, "宽(mm)"),
+            "quantity": _int_number(ws.cell(r, header_cols["订单总数量"]).value, "订单总数量"),
+            "total_weight_t": float(_number(ws.cell(r, header_cols["零件总重量(t)"]).value, "零件总重量(t)")),
+            "source_file": "历史累计台账",
+            "order_container_name": "",
+            "source_row": r,
+            "board_sources": board_sources,
+            "processed": processed,
+            "remaining": remaining,
+            "pending_weight_t": float(_number(ws.cell(r, header_cols["待加工重量(t)"]).value or 0, "待加工重量(t)")),
+            "status": _text(ws.cell(r, header_cols["零件状态"]).value),
+        })
 
     def read_sheet_records(sheet_name: str) -> list[dict]:
         if sheet_name not in wb.sheetnames:
@@ -292,6 +318,7 @@ def read_existing_ledger(path) -> dict:
 
     return {
         "state": state,
+        "historical_rows": historical_rows,
         "flows": flows,
         "board_records": board_records,
         "anomalies": anomalies,
