@@ -116,6 +116,7 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             "总净重(kg)", "总净重（kg）", "总净重(KG)", "总净重（KG）",
             "重量(吨)", "重量（吨）", "重量(t)", "重量（t）", "重量(T)", "重量（T）",
             "重量(kg)", "重量（kg）", "重量(KG)", "重量（KG）",
+            "重量",
         )
         if not all([order_col, drawing_col, thickness_col, qty_col, length_col, width_col, bevel_col, weight_col]):
             raise ValueError(f"原始汇总表缺少正式必需字段: {source_label}")
