@@ -42,6 +42,15 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _row_key(row: dict) -> tuple:
+    return (
+        str(row.get("order", "")).strip(),
+        str(row.get("drawing", "")).strip(),
+        float(row.get("thickness", 0)),
+        str(row.get("bevel", "")).strip(),
+    )
+
+
 def _anomaly_signature(row: dict) -> tuple:
     return (
         str(row.get("板材号", "")),
@@ -67,6 +76,24 @@ def _verify_output_workbooks(cumulative_path: Path, pending_path: Path):
     pending = load_workbook(pending_path, read_only=True, data_only=True)
     if "当前待加工零件" not in pending.sheetnames:
         raise RuntimeError("当前待加工零件文件缺少正式工作表")
+
+
+def _split_historical_rows(existing: dict, source_index: dict) -> tuple[list[dict], list[dict]]:
+    """
+    累计台账永久保留历史：
+    - 已从“正在加工”退出且历史剩余=0的零件，继续保留在累计台账。
+    - 若源文件消失时仍存在非0剩余（含负数异常），阻断整次运行，不能把历史当成已结束。
+    """
+    completed_history: list[dict] = []
+    missing_incomplete: list[dict] = []
+    for row in existing.get("historical_rows", []):
+        if _row_key(row) in source_index:
+            continue
+        if int(row.get("remaining", 0)) == 0:
+            completed_history.append(row)
+        else:
+            missing_incomplete.append(row)
+    return completed_history, missing_incomplete
 
 
 def run():
@@ -111,8 +138,23 @@ def run():
             source_records.extend(records)
             logger.info(f"读取订单源 {item.get('order_container_name') or item['name']}：{len(records)} 条零件")
 
-        build_source_index(source_records)  # 强制检查正式业务键唯一。
+        source_index = build_source_index(source_records)  # 强制检查正式业务键唯一。
         logger.info(f"当前订单原始零件总条数 {len(source_records)}")
+
+        # 累计台账永久性保护：已完成退出订单保留；未完成却丢失源文件则阻断。
+        completed_history, missing_incomplete = _split_historical_rows(existing, source_index)
+        if missing_incomplete:
+            affected_orders = sorted({row["order"] for row in missing_incomplete})
+            examples = ", ".join(
+                f"{row['order']}/{row['drawing']}/剩余{row['remaining']}"
+                for row in missing_incomplete[:5]
+            )
+            raise RuntimeError(
+                "发现累计台账中仍未完成/异常的零件已不在“正在加工”原始订单源中，"
+                f"禁止静默删除。受影响订单={affected_orders}；示例={examples}"
+            )
+        if completed_history:
+            logger.info(f"永久累计台账保留已退出的完成历史零件 {len(completed_history)} 条")
 
         # 3) 逐板预校验；整板任一行失败则整板阻断。
         delta_by_key: dict[tuple, int] = defaultdict(int)
@@ -157,22 +199,25 @@ def run():
             posted_boards.add(board_id)
             logger.info(f"板材 {board_id} 校验通过：计入 {result['board_record']['计入件数']} 件")
 
-        # 4) 以订单原始资料 + 既有累计 + 本次增量生成当前状态。
-        state_rows = build_current_state(
+        # 4) 以当前原始资料 + 既有累计 + 本次增量生成活动订单状态。
+        active_state_rows = build_current_state(
             source_records,
             existing_state=existing["state"],
             delta_by_key=dict(delta_by_key),
             source_additions=dict(source_additions),
         )
+        # 累计台账永久保留已完成且已退出正在加工的订单历史；动态待加工表只使用活动订单。
+        cumulative_state_rows = active_state_rows + completed_history
 
-        total_remaining = sum(int(r["remaining"]) for r in state_rows)
-        total_pending_weight = sum(float(r["pending_weight_t"]) for r in state_rows)
-        logger.info(f"生成后当前剩余件数 {total_remaining}")
-        logger.info(f"生成后当前未出重量 {total_pending_weight:.3f} t")
+        total_remaining = sum(int(r["remaining"]) for r in active_state_rows)
+        total_pending_weight = sum(float(r["pending_weight_t"]) for r in active_state_rows)
+        logger.info(f"生成后活动订单当前剩余件数 {total_remaining}")
+        logger.info(f"生成后活动订单当前未出重量 {total_pending_weight:.3f} t")
 
         run_note = (
             f"自动执行：扫描订单源{len(source_files)}个、待处理板材{len(pending_files)}张；"
-            f"本次校验通过{len(accepted_files)}张、阻断{len(blocked)}张。"
+            f"本次校验通过{len(accepted_files)}张、阻断{len(blocked)}张；"
+            f"永久保留已退出完成历史{len(completed_history)}条。"
             "所有尺寸、订单数量、基础总重量均以正在加工目录原始汇总表为事实源；"
             "拆图结果成功写入并回读验证后才归档。"
         )
@@ -184,14 +229,14 @@ def run():
         cumulative_out = temp_dir / "累计加工台账.xlsx"
         pending_out = temp_dir / "当前待加工零件.xlsx"
         generate_cumulative_report(
-            state_rows,
+            cumulative_state_rows,
             all_flows,
             all_board_records,
             all_anomalies,
             cumulative_out,
             note=run_note,
         )
-        generate_pending_report(state_rows, pending_out, note=run_note)
+        generate_pending_report(active_state_rows, pending_out, note=run_note)
         _verify_output_workbooks(cumulative_out, pending_out)
 
         # 测试模式也保留本次生成物为 GitHub Actions artifact，便于核对，但绝不写 Drive。
