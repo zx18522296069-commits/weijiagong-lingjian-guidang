@@ -18,6 +18,7 @@ import os
 import shutil
 import tempfile
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -25,6 +26,7 @@ from openpyxl import load_workbook
 from modules.drive_manager import DriveManager
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
 from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
+from modules.idempotency import reconcile_posted_board
 from modules.logger import get_logger
 from modules.process_parts import (
     build_current_state,
@@ -33,6 +35,7 @@ from modules.process_parts import (
 )
 
 logger = get_logger()
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 def _required_env(name: str) -> str:
@@ -66,6 +69,19 @@ def _append_unique_anomaly(target: list[dict], seen: set[tuple], row: dict) -> b
     target.append(row)
     seen.add(sig)
     return True
+
+
+def _blocked_anomaly(board_id: str, reason: str, quantity: int = 0) -> dict:
+    return {
+        "板材号": board_id,
+        "业务日期": datetime.now(BEIJING_TZ).date().isoformat(),
+        "订单号": "",
+        "图号": "",
+        "厚度(mm)": "",
+        "数量": quantity,
+        "异常类型": "阻断入账",
+        "说明": f"{reason}；未重复累计、未归档，文件保留在拆图结果根目录。",
+    }
 
 
 def _verify_output_workbooks(cumulative_path: Path, pending_path: Path):
@@ -138,7 +154,7 @@ def run():
             source_records.extend(records)
             logger.info(f"读取订单源 {item.get('order_container_name') or item['name']}：{len(records)} 条零件")
 
-        source_index = build_source_index(source_records)  # 强制检查正式业务键唯一。
+        source_index = build_source_index(source_records)
         logger.info(f"当前订单原始零件总条数 {len(source_records)}")
 
         # 累计台账永久性保护：已完成退出订单保留；未完成却丢失源文件则阻断。
@@ -163,6 +179,7 @@ def run():
         new_board_records: list[dict] = []
         new_anomalies: list[dict] = []
         accepted_files: list[dict] = []
+        reconciled_files: list[dict] = []
         blocked: list[tuple[str, str]] = []
 
         anomaly_seen = {_anomaly_signature(r) for r in existing["anomalies"]}
@@ -174,6 +191,29 @@ def run():
             local = temp_dir / f"pending_{idx}_{Path(filename).name}"
             drive.download_file(item["id"], str(local))
             payload = read_split_result(local, board_id=board_id, source_name=filename)
+
+            # 上次可能已经成功写入台账，但在“移动到已录入数量”之前中断。
+            # 这种情况不能再次累计；只有根目录文件与永久台账完全一致时，才允许补归档。
+            if board_id in posted_boards:
+                recovery = reconcile_posted_board(
+                    board_id=board_id,
+                    filename=filename,
+                    split_payload=payload,
+                    source_records=source_records,
+                    existing_flows=existing["flows"],
+                    existing_board_records=existing["board_records"],
+                )
+                if recovery["ok"]:
+                    reconciled_files.append({**item, "board_id": board_id})
+                    logger.info(f"板材 {board_id} 已入账且内容一致：本轮只补归档，不重复累计")
+                else:
+                    reason = recovery["reason"]
+                    blocked.append((board_id, reason))
+                    qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
+                    _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
+                    logger.warning(f"板材 {board_id} 已入账但根目录文件无法安全补归档：{reason}")
+                continue
+
             result = validate_new_board(
                 board_id=board_id,
                 filename=filename,
@@ -206,7 +246,6 @@ def run():
             delta_by_key=dict(delta_by_key),
             source_additions=dict(source_additions),
         )
-        # 累计台账永久保留已完成且已退出正在加工的订单历史；动态待加工表只使用活动订单。
         cumulative_state_rows = active_state_rows + completed_history
 
         total_remaining = sum(int(r["remaining"]) for r in active_state_rows)
@@ -216,7 +255,7 @@ def run():
 
         run_note = (
             f"自动执行：扫描订单源{len(source_files)}个、待处理板材{len(pending_files)}张；"
-            f"本次校验通过{len(accepted_files)}张、阻断{len(blocked)}张；"
+            f"本次新入账{len(accepted_files)}张、补归档候选{len(reconciled_files)}张、阻断{len(blocked)}张；"
             f"永久保留已退出完成历史{len(completed_history)}条。"
             "所有尺寸、订单数量、基础总重量均以正在加工目录原始汇总表为事实源；"
             "拆图结果成功写入并回读验证后才归档。"
@@ -239,12 +278,13 @@ def run():
         generate_pending_report(active_state_rows, pending_out, note=run_note)
         _verify_output_workbooks(cumulative_out, pending_out)
 
-        # 测试模式也保留本次生成物为 GitHub Actions artifact，便于核对，但绝不写 Drive。
         shutil.copy2(cumulative_out, artifact_dir / "累计加工台账_测试生成.xlsx")
         shutil.copy2(pending_out, artifact_dir / "当前待加工零件_测试生成.xlsx")
 
         if test_mode:
             logger.info("只读测试完成：未写回 Drive、未移动任何拆图结果文件")
+            if reconciled_files:
+                logger.info(f"测试发现 {len(reconciled_files)} 张已入账但尚未归档的文件，可在正式模式安全补归档")
             if blocked:
                 for board_id, reason in blocked:
                     logger.warning(f"测试发现阻断板材 {board_id}: {reason}")
@@ -261,16 +301,14 @@ def run():
         drive.download_file(pending_file_id, str(verify_pending))
         _verify_output_workbooks(verify_cumulative, verify_pending)
         verified_ledger = read_existing_ledger(verify_cumulative)
-        missing_boards = [
-            item["board_id"] for item in accepted_files
-            if item["board_id"] not in verified_ledger["posted_boards"]
-        ]
+        verify_board_ids = [item["board_id"] for item in accepted_files + reconciled_files]
+        missing_boards = [board_id for board_id in verify_board_ids if board_id not in verified_ledger["posted_boards"]]
         if missing_boards:
             raise RuntimeError(f"写回后板材入账记录验证失败: {missing_boards}")
         logger.info("正式文件回读验证通过")
 
-        # 6) 只有经过本次全量核验、成功写入、回读确认的板材文件才移动到已录入数量。
-        for item in accepted_files:
+        # 6) 新入账板材 + 已入账但上次归档中断的板材，在回读成功后统一移动。
+        for item in accepted_files + reconciled_files:
             drive.move_file(item["id"], drive.archive_folder_id)
             logger.info(f"已归档拆图结果: {item['name']} -> 拆图结果/已录入数量")
 
