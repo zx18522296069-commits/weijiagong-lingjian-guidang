@@ -16,7 +16,10 @@ on:
           - test
           - production
 
-# 同一时间只允许一个生产流程运行；后来的运行排队，不取消正在执行的任务。
+permissions:
+  contents: read
+
+# 同一时间只允许一个流程运行；后来的运行排队，不取消正在执行的任务。
 concurrency:
   group: weijiagong-lingjian-guidang
   cancel-in-progress: false
@@ -27,6 +30,7 @@ jobs:
     timeout-minutes: 30
 
     env:
+      PYTHONUNBUFFERED: '1'
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
       # 正式 Google Drive 目录/文件（用户已确认）
@@ -38,7 +42,7 @@ jobs:
       CUMULATIVE_FILE_ID: '1BDXfJN8afgla9Z9Al-tVQmqP107afkPb'
       PENDING_FILE_ID: '1Lw91mzMQkqEx4sAn_U6JgHaDfa6bQpUG'
 
-      # 定时任务在首次真实验证前保持只读；手动可显式选择 production。
+      # 首次真实验证前：定时任务保持只读；手动可显式选择 production。
       TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'production' && 'false' || 'true' }}
 
     steps:
@@ -53,6 +57,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Syntax check
+        run: python -m compileall -q main.py modules
+
       - name: Run update
         run: python main.py
 
@@ -64,3 +71,12 @@ jobs:
           path: logs/
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Save generated test workbooks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-workbooks-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
