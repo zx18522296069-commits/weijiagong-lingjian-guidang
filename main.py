@@ -21,9 +21,6 @@ def run():
 
     test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
 
-    if not test_mode:
-        logger.warning("当前仍建议先使用TEST_MODE进行首次真实连接验证")
-
     drive = DriveManager()
 
     if not drive.check_config():
@@ -32,11 +29,25 @@ def run():
     logger.info("Google Drive配置检查通过")
 
     try:
-        files = drive.list_drive_files()
-        logger.info(f"扫描到文件数量: {len(files)}")
+        files = drive.scan_folder_recursive()
+        logger.info(f"递归扫描文件数量: {len(files)}")
+
+        order_files = []
+        complete_files = []
 
         for item in files:
-            logger.info(f"文件: {item.get('name')} | ID: {item.get('id')}")
+            name = item.get("name", "")
+            path = item.get("path", "")
+
+            if "完成" in name:
+                complete_files.append(item)
+            if "汇总表" in name:
+                order_files.append(item)
+
+            logger.info(f"文件: {name} | 路径: {path}")
+
+        logger.info(f"订单汇总表数量: {len(order_files)}")
+        logger.info(f"完成文件数量: {len(complete_files)}")
 
     except Exception as e:
         logger.error(f"Drive扫描失败: {e}")
