@@ -65,9 +65,19 @@ def _header_map(row: Iterable) -> dict[str, int]:
     return result
 
 
+def _worksheet_bounds(ws) -> tuple[int, int]:
+    """兼容部分第三方生成的 xlsx：read_only 模式下可能没有预写 worksheet dimension。"""
+    if ws.max_row is None or ws.max_column is None:
+        ws.calculate_dimension(force=True)
+    return int(ws.max_row or 0), int(ws.max_column or 0)
+
+
 def _find_header(ws, required: set[str], max_rows: int = 40):
-    for r in range(1, min(ws.max_row, max_rows) + 1):
-        values = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+    max_row, max_column = _worksheet_bounds(ws)
+    if max_row < 1 or max_column < 1:
+        return None, None
+    for r in range(1, min(max_row, max_rows) + 1):
+        values = [ws.cell(r, c).value for c in range(1, max_column + 1)]
         texts = {_text(v) for v in values if _text(v)}
         if required.issubset(texts):
             return r, _header_map(values)
@@ -107,8 +117,9 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             raise ValueError(f"原始汇总表缺少正式必需字段: {source_name or path}")
 
         weight_is_kg = "kg" in weight_name.lower()
+        max_row, _ = _worksheet_bounds(ws)
 
-        for r in range(header_row + 1, ws.max_row + 1):
+        for r in range(header_row + 1, max_row + 1):
             order_raw = _text(ws.cell(r, order_col).value)
             drawing = normalize_drawing(ws.cell(r, drawing_col).value)
             if not order_raw and not drawing:
@@ -164,8 +175,9 @@ def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
         if not all([split_qty_col, base_qty_col, base_weight_col, order_col, drawing_col, thickness_col]):
             raise ValueError(f"拆图结果缺少正式必需字段: {source_name or path}")
 
+        max_row, max_column = _worksheet_bounds(ws)
         rows: list[dict] = []
-        for r in range(header_row + 1, ws.max_row + 1):
+        for r in range(header_row + 1, max_row + 1):
             order_raw = _text(ws.cell(r, order_col).value)
             drawing = normalize_drawing(ws.cell(r, drawing_col).value)
             if not order_raw and not drawing:
@@ -199,13 +211,13 @@ def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
             "差额绝对值(KG)": "abs_diff_kg",
             "复核结论": "review_conclusion",
         }
-        for r in range(1, ws.max_row + 1):
-            for c in range(1, ws.max_column + 1):
+        for r in range(1, max_row + 1):
+            for c in range(1, max_column + 1):
                 label = _text(ws.cell(r, c).value)
                 if label not in labels:
                     continue
                 value = None
-                for cc in range(c + 1, min(ws.max_column, c + 3) + 1):
+                for cc in range(c + 1, min(max_column, c + 3) + 1):
                     candidate = ws.cell(r, cc).value
                     if candidate not in (None, ""):
                         value = candidate
@@ -233,10 +245,13 @@ def read_existing_ledger(path) -> dict:
     state: dict[tuple, dict] = {}
     historical_rows: list[dict] = []
     ws = wb["累计加工台账"]
+    max_row, max_column = _worksheet_bounds(ws)
+    if max_row < 1 or max_column < 1:
+        raise ValueError("累计加工台账.xlsx 的“累计加工台账”工作表为空或无法解析范围")
     current_order = ""
     header_cols = None
 
-    for r in range(1, ws.max_row + 1):
+    for r in range(1, max_row + 1):
         first = _text(ws.cell(r, 1).value)
         if first.startswith("订单："):
             text = first[len("订单："):]
@@ -244,7 +259,7 @@ def read_existing_ledger(path) -> dict:
             header_cols = None
             continue
         if first == "图号":
-            header_cols = _header_map([ws.cell(r, c).value for c in range(1, ws.max_column + 1)])
+            header_cols = _header_map([ws.cell(r, c).value for c in range(1, max_column + 1)])
             continue
         if not current_order or not header_cols or not first:
             continue
@@ -295,12 +310,13 @@ def read_existing_ledger(path) -> dict:
         if sheet_name not in wb.sheetnames:
             return []
         sheet = wb[sheet_name]
-        if sheet.max_row < 1:
+        sheet_max_row, sheet_max_column = _worksheet_bounds(sheet)
+        if sheet_max_row < 1 or sheet_max_column < 1:
             return []
-        headers = [_text(sheet.cell(1, c).value) for c in range(1, sheet.max_column + 1)]
+        headers = [_text(sheet.cell(1, c).value) for c in range(1, sheet_max_column + 1)]
         records = []
-        for r in range(2, sheet.max_row + 1):
-            values = [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
+        for r in range(2, sheet_max_row + 1):
+            values = [sheet.cell(r, c).value for c in range(1, sheet_max_column + 1)]
             if not any(v not in (None, "") for v in values):
                 continue
             records.append({headers[i]: values[i] for i in range(len(headers)) if headers[i]})
