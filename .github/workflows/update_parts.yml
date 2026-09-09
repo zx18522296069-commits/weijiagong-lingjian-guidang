@@ -2,22 +2,44 @@ name: 未加工零件自动更新
 
 on:
   schedule:
-    # 北京时间17:25和22:00
-    # GitHub Actions 使用UTC时间
+    # GitHub Actions 使用 UTC：09:25 = 北京时间17:25；14:00 = 北京时间22:00
     - cron: '25 9 * * *'
     - cron: '0 14 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式（首次测试保持 test）'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - production
+
+# 同一时间只允许一个生产流程运行；后来的运行排队，不取消正在执行的任务。
+concurrency:
+  group: weijiagong-lingjian-guidang
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     env:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      DRIVE_ROOT_FOLDER_ID: ${{ secrets.DRIVE_ROOT_FOLDER_ID }}
-      RESULT_FOLDER_ID: ${{ secrets.RESULT_FOLDER_ID }}
-      ARCHIVE_FOLDER_ID: ${{ secrets.ARCHIVE_FOLDER_ID }}
-      TEST_MODE: true
+
+      # 正式 Google Drive 目录/文件（用户已确认）
+      DRIVE_ROOT_FOLDER_ID: '1zM-DIWR_7ruB-41G7VETmVmCnKqB2WqM'
+      WORKING_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
+      SPLIT_FOLDER_ID: '1lr9AUd9hO81Ylbkt4iJf88og4aazC797'
+      RESULT_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
+      ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
+      CUMULATIVE_FILE_ID: '1BDXfJN8afgla9Z9Al-tVQmqP107afkPb'
+      PENDING_FILE_ID: '1Lw91mzMQkqEx4sAn_U6JgHaDfa6bQpUG'
+
+      # 定时任务在首次真实验证前保持只读；手动可显式选择 production。
+      TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'production' && 'false' || 'true' }}
 
     steps:
       - name: Checkout
@@ -33,12 +55,12 @@ jobs:
 
       - name: Run update
         run: python main.py
-        continue-on-error: false
 
       - name: Save execution log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: update-log
+          name: update-log-${{ github.run_id }}
           path: logs/
           if-no-files-found: ignore
+          retention-days: 30
