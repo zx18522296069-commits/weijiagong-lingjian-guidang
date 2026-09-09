@@ -14,16 +14,19 @@
 10. 输出日志
 """
 
+import os
 from modules.logger import get_logger
 from modules.drive_manager import DriveManager
-from modules.excel_reader import read_excel, find_completion_files
-from modules.process_parts import calculate_remaining
 
 logger = get_logger()
 
 
 def run():
     logger.info("开始执行未加工零件自动更新任务")
+
+    test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
+    if test_mode:
+        logger.info("当前运行模式：只读测试模式，不修改Drive文件")
 
     drive = DriveManager()
 
@@ -32,16 +35,19 @@ def run():
 
     logger.info("Google Drive配置检查通过")
 
-    # 生产环境执行顺序
-    # 1. 获取Drive文件列表
-    # 2. 读取正在加工数据
-    # 3. 读取拆图完成数据
-    # 4. 按板材编号累计
-    # 5. 生成当前待加工零件
-    # 6. 更新累计加工台账
-    # 7. 完成订单后归档
+    # 下一阶段接入真实Drive读取：
+    # 1. 获取订单文件
+    # 2. 获取拆图完成文件
+    # 3. 读取Excel
+    # 4. 累计加工计算
+    # 5. 生成结果
+    # 6. 写回Drive
+    # 7. 归档完成文件
 
-    logger.info("主流程框架已连接，等待真实Drive授权测试")
+    if test_mode:
+        logger.info("只读测试完成，未执行写入操作")
+    else:
+        logger.info("生产模式准备执行")
 
 
 if __name__ == "__main__":
