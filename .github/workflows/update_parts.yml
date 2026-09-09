@@ -30,3 +30,12 @@ jobs:
 
       - name: Run update
         run: python main.py
+        continue-on-error: false
+
+      - name: Save execution log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-log
+          path: logs/
+          if-no-files-found: ignore
