@@ -43,3 +43,25 @@ def get_status(remaining):
     if remaining < 0:
         return "异常-超加工"
     return "进行中"
+
+
+def build_remaining_records(order_records, processed_index):
+    """根据订单汇总和累计台账生成当前剩余明细"""
+    result = []
+
+    for row in order_records:
+        material_id = normalize_material_id(row.get("板材编号"))
+        drawing = str(row.get("图号", "")).strip()
+        total = int(row.get("件数", 0) or 0)
+
+        processed = processed_index.get((material_id, drawing), 0)
+        remaining = calculate_remaining(total, processed)
+
+        result.append({
+            **row,
+            "累计已加工": processed,
+            "当前剩余": remaining,
+            "状态": get_status(remaining)
+        })
+
+    return result
