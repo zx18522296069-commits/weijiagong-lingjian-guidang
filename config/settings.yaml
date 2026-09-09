@@ -1,0 +1,21 @@
+# 未加工零件自动归档配置
+
+schedule:
+  timezone: Asia/Shanghai
+  runs:
+    - "17:25"
+    - "22:00"
+
+rules:
+  keep_material_suffix: true
+  finished_remove_only_when_order_complete: true
+  prevent_duplicate_import: true
+
+folders:
+  working: "正在加工"
+  result: "拆图结果"
+  imported: "已录入数量"
+
+output:
+  remaining_file: "当前待加工零件.xlsx"
+  ledger_file: "累计加工台账.xlsx"
