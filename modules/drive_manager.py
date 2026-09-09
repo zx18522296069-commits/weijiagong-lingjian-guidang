@@ -4,17 +4,32 @@ Google Drive连接模块
 用于GitHub Actions云端访问：
 - 正在加工
 - 拆图结果
-- 输出文件
+- 当前待加工零件.xlsx
+- 累计加工台账.xlsx
 
-实际凭证通过GitHub Secrets注入，不保存账号信息。
+认证信息通过GitHub Secrets注入。
+不保存个人账号密码。
 """
 
-
-def list_drive_files(folder_id):
-    """读取指定Drive文件夹，待接入Google Drive API"""
-    raise NotImplementedError
+import os
 
 
-def upload_file(file_path, target_folder_id):
-    """上传生成文件，待接入Google Drive API"""
-    raise NotImplementedError
+class DriveManager:
+    def __init__(self):
+        self.folder_id = os.getenv("DRIVE_ROOT_FOLDER_ID", "")
+        self.credentials = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+
+    def check_config(self):
+        return bool(self.folder_id and self.credentials)
+
+    def list_drive_files(self, folder_id=None):
+        """Google Drive API读取入口"""
+        return []
+
+    def upload_file(self, file_path, target_folder_id=None):
+        """生成Excel上传入口"""
+        return False
+
+    def move_file(self, file_id, target_folder_id):
+        """已录入数量归档入口"""
+        return False
