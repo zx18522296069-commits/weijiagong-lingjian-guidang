@@ -92,7 +92,13 @@ class DriveManager:
     def list_order_source_files(self) -> list[dict]:
         """
         扫描“正在加工”直接子项；支持订单文件夹和文件夹快捷方式。
-        每个订单只返回其目录下名称含“汇总表”的 Excel 文件。
+
+        正式订单源允许两种已验证命名：
+        1. 文件名包含“汇总表”；
+        2. 若不存在“汇总表”命名文件，则使用文件名包含“模板”的 Excel，
+           其工作簿内部必须仍由读取层验证存在正式“汇总表”结构。
+
+        同一订单同一优先级若出现多个候选文件则阻断，禁止猜测使用哪一个。
         不把正式台账/当前待加工表当成订单源。
         """
         result: list[dict] = []
@@ -101,16 +107,34 @@ class DriveManager:
             if not resolved:
                 continue
             folder_id, container_name = resolved
+            excel_children = []
             for child in self.list_children(folder_id):
                 name = str(child.get("name", ""))
                 lower = name.lower()
-                if "汇总表" not in name or not lower.endswith((".xlsx", ".xlsm", ".xls")):
+                if child.get("mimeType") == FOLDER_MIME:
                     continue
-                result.append({
-                    **child,
-                    "order_container_name": container_name,
-                    "order_folder_id": folder_id,
-                })
+                if not lower.endswith((".xlsx", ".xlsm", ".xls")):
+                    continue
+                excel_children.append(child)
+
+            preferred = [child for child in excel_children if "汇总表" in str(child.get("name", ""))]
+            fallback = [child for child in excel_children if "模板" in str(child.get("name", ""))]
+            candidates = preferred if preferred else fallback
+
+            if len(candidates) > 1:
+                names = [str(child.get("name", "")) for child in candidates]
+                raise RuntimeError(
+                    f"订单目录存在多个原始汇总表候选，禁止自动猜测: {container_name} -> {names}"
+                )
+            if not candidates:
+                continue
+
+            child = candidates[0]
+            result.append({
+                **child,
+                "order_container_name": container_name,
+                "order_folder_id": folder_id,
+            })
         return result
 
     def list_pending_split_files(self) -> list[dict]:
