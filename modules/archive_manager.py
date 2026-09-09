@@ -16,6 +16,16 @@ def should_archive(order_status):
     return order_status == "完成"
 
 
+def build_archive_record(order_id, files=None):
+    """生成归档记录，不执行实际移动"""
+    return {
+        "订单号": order_id,
+        "文件数量": len(files or []),
+        "归档时间": datetime.now().isoformat(),
+        "状态": "待移动"
+    }
+
+
 def archive_completed_file(file_id, target_folder=None):
     """
     移动已完成文件
