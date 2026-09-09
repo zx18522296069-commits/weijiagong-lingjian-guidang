@@ -1,17 +1,12 @@
 """
 未加工零件自动归档系统主入口
 
-执行流程：
+测试阶段：
 1. 加载配置
 2. 连接 Google Drive
-3. 扫描订单和完成文件
-4. 读取 Excel
-5. 数据校验
-6. 累计加工计算
-7. 生成结果文件
-8. 上传结果
-9. 归档已录入文件
-10. 输出日志
+3. 扫描目录结构
+4. 输出扫描结果
+5. 不修改生产文件
 """
 
 import os
@@ -25,8 +20,9 @@ def run():
     logger.info("开始执行未加工零件自动更新任务")
 
     test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
-    if test_mode:
-        logger.info("当前运行模式：只读测试模式，不修改Drive文件")
+
+    if not test_mode:
+        logger.warning("当前仍建议先使用TEST_MODE进行首次真实连接验证")
 
     drive = DriveManager()
 
@@ -35,19 +31,21 @@ def run():
 
     logger.info("Google Drive配置检查通过")
 
-    # 下一阶段接入真实Drive读取：
-    # 1. 获取订单文件
-    # 2. 获取拆图完成文件
-    # 3. 读取Excel
-    # 4. 累计加工计算
-    # 5. 生成结果
-    # 6. 写回Drive
-    # 7. 归档完成文件
+    try:
+        files = drive.list_drive_files()
+        logger.info(f"扫描到文件数量: {len(files)}")
+
+        for item in files:
+            logger.info(f"文件: {item.get('name')} | ID: {item.get('id')}")
+
+    except Exception as e:
+        logger.error(f"Drive扫描失败: {e}")
+        raise
 
     if test_mode:
         logger.info("只读测试完成，未执行写入操作")
     else:
-        logger.info("生产模式准备执行")
+        logger.info("扫描完成，等待正式处理流程接入")
 
 
 if __name__ == "__main__":
