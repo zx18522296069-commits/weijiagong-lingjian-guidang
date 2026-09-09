@@ -21,7 +21,7 @@ from modules.drive_manager import DriveManager
 from modules.excel_reader import read_excel
 from modules.process_parts import build_processed_index, build_remaining_records, is_order_completed
 from modules.excel_generator import generate_report
-from modules.archive_manager import should_archive, archive_completed_file
+from modules.archive_manager import archive_completed_file
 
 logger = get_logger()
 
@@ -48,7 +48,6 @@ def run():
 
     completion_records = []
     summary_records = []
-    completed_orders = []
 
     with tempfile.TemporaryDirectory() as temp_dir:
         for item in complete_files:
@@ -74,12 +73,14 @@ def run():
 
             archive_folder = os.getenv("ARCHIVE_FOLDER_ID", "")
             if archive_folder:
-                for item in complete_files:
-                    if should_archive("完成"):
+                if is_order_completed(remaining):
+                    for item in complete_files:
                         record = archive_completed_file(item["id"], archive_folder)
                         if record:
                             drive.move_file(item["id"], archive_folder)
                             logger.info(f"归档完成: {item['name']}")
+                else:
+                    logger.info("订单未全部完成，跳过归档")
 
     if test_mode:
         logger.info("测试模式结束，未执行上传和归档")
