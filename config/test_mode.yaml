@@ -1,0 +1,17 @@
+# 首次云端测试配置
+# 目的：验证GitHub Actions读取环境，不修改生产数据
+
+mode: read_only
+
+write_back: false
+archive_move: false
+
+check:
+  - drive_connection
+  - folder_access
+  - excel_read
+  - completion_file_scan
+  - rule_engine_load
+
+output:
+  log_only: true
