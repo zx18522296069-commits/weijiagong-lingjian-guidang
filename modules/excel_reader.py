@@ -95,6 +95,7 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
     """读取订单原始汇总表，重量统一为吨；长宽、数量、坡口直接来自原始汇总表。"""
     wb = load_workbook(path, read_only=True, data_only=True)
     records: list[dict] = []
+    source_label = f"{order_container_name or '未知订单目录'} / {source_name or Path(path).name}"
 
     for ws in wb.worksheets:
         header_row, headers = _find_header(ws, {"订单号", "图号", "厚度", "件数"})
@@ -112,9 +113,11 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             headers,
             "总净重(t)", "总净重（t）", "总净重(T)", "总净重（T）",
             "总净重(kg)", "总净重（kg）", "总净重(KG)", "总净重（KG）",
+            "重量(吨)", "重量（吨）", "重量(t)", "重量（t）", "重量(T)", "重量（T）",
+            "重量(kg)", "重量（kg）", "重量(KG)", "重量（KG）",
         )
         if not all([order_col, drawing_col, thickness_col, qty_col, length_col, width_col, bevel_col, weight_col]):
-            raise ValueError(f"原始汇总表缺少正式必需字段: {source_name or path}")
+            raise ValueError(f"原始汇总表缺少正式必需字段: {source_label}")
 
         weight_is_kg = "kg" in weight_name.lower()
         max_row, _ = _worksheet_bounds(ws)
@@ -127,9 +130,9 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             if not order_raw:
                 continue
             if not drawing:
-                raise ValueError(f"原始汇总表第{r}行图号为空: {source_name or path}")
+                raise ValueError(f"原始汇总表第{r}行图号为空: {source_label}")
 
-            total_weight = _number(ws.cell(r, weight_col).value, "总净重")
+            total_weight = _number(ws.cell(r, weight_col).value, weight_name or "重量")
             total_weight_t = total_weight / 1000.0 if weight_is_kg else total_weight
             records.append({
                 "order_raw": order_raw,
@@ -149,7 +152,7 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
         if records:
             return records
 
-    raise ValueError(f"未找到订单汇总表正式表头: {source_name or path}")
+    raise ValueError(f"未找到订单汇总表正式表头: {source_label}")
 
 
 def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
