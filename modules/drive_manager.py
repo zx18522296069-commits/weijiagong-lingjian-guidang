@@ -22,6 +22,9 @@ class DriveManager:
         self.credentials_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         self.service = None
 
+    def check_config(self):
+        return bool(self.folder_id and self.credentials_json)
+
     def connect(self):
         if not self.credentials_json:
             raise RuntimeError("缺少 GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -30,7 +33,7 @@ class DriveManager:
         credentials = service_account.Credentials.from_service_account_info(
             info, scopes=SCOPES
         )
-        self.service = build("drive", "v3", credentials=credentials)
+        self.service = build("google", "drive", credentials=credentials)
         return self.service
 
     def list_drive_files(self, folder_id=None):
@@ -46,16 +49,13 @@ class DriveManager:
         return result.get("files", [])
 
     def scan_folder_recursive(self, folder_id=None, path=""):
-        """递归扫描Drive目录，返回所有文件信息"""
         files = []
         current_folder = folder_id or self.folder_id
 
         for item in self.list_drive_files(current_folder):
             item_path = f"{path}/{item['name']}"
             if item.get("mimeType") == "application/vnd.google-apps.folder":
-                files.extend(
-                    self.scan_folder_recursive(item["id"], item_path)
-                )
+                files.extend(self.scan_folder_recursive(item["id"], item_path))
             else:
                 item["path"] = item_path
                 files.append(item)
