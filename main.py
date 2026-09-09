@@ -14,6 +14,7 @@
 """
 
 from modules.logger import get_logger
+from modules.drive_manager import DriveManager
 
 logger = get_logger()
 
@@ -21,21 +22,22 @@ logger = get_logger()
 def run():
     logger.info("开始执行未加工零件自动更新任务")
 
-    # 模块调用入口
-    # drive_manager:
-    #   获取Google Drive文件
-    # excel_reader:
-    #   读取订单和完成数据
-    # validator:
-    #   数据核对
-    # process_parts:
-    #   累计加工计算
-    # excel_generator:
-    #   生成输出表
-    # archive_manager:
-    #   完成归档
+    drive = DriveManager()
 
-    logger.info("流程模块加载完成，等待生产环境配置")
+    if not drive.check_config():
+        raise RuntimeError("缺少 Google Drive 配置，请设置 GitHub Secrets")
+
+    logger.info("Google Drive配置检查通过")
+
+    # 后续生产模块调用：
+    # 1. 读取Drive文件
+    # 2. Excel解析
+    # 3. 数据校验
+    # 4. 累计加工计算
+    # 5. 生成结果文件
+    # 6. 上传并归档
+
+    logger.info("云端执行环境已准备，等待授权后运行生产数据")
 
 
 if __name__ == "__main__":
