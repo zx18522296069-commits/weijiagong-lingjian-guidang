@@ -96,6 +96,7 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
     wb = load_workbook(path, read_only=True, data_only=True)
     records: list[dict] = []
     source_label = f"{order_container_name or '未知订单目录'} / {source_name or Path(path).name}"
+    expected_order = normalize_order_key(order_container_name) if order_container_name else ""
 
     for ws in wb.worksheets:
         header_row, headers = _find_header(ws, {"订单号", "图号", "厚度", "件数"})
@@ -127,6 +128,20 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             drawing = normalize_drawing(ws.cell(r, drawing_col).value)
             if not order_raw and not drawing:
                 continue
+
+            # 原始明细表后常附“厚度核对/合计”等汇总区。只读取与订单目录
+            # 归一化订单号一致的连续明细块，防止把汇总行误当零件。
+            normalized_order = normalize_order_key(order_raw) if order_raw else ""
+            if expected_order and normalized_order and normalized_order != expected_order:
+                if records:
+                    break
+                if drawing:
+                    raise ValueError(
+                        f"原始汇总表订单号与订单目录不一致: {source_label} 第{r}行 "
+                        f"订单号={order_raw!r}"
+                    )
+                continue
+
             if not order_raw:
                 continue
             if not drawing:
@@ -136,7 +151,7 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             total_weight_t = total_weight / 1000.0 if weight_is_kg else total_weight
             records.append({
                 "order_raw": order_raw,
-                "order": normalize_order_key(order_raw),
+                "order": normalized_order,
                 "drawing": drawing,
                 "thickness": _number(ws.cell(r, thickness_col).value, "厚度"),
                 "quantity": _int_number(ws.cell(r, qty_col).value, "件数"),
