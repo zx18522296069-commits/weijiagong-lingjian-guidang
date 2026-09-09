@@ -8,7 +8,8 @@
 4. 下载并读取Excel
 5. 建立累计加工索引
 6. 生成当前剩余明细
-7. 测试模式不修改生产文件
+7. 上传结果文件（正式模式）
+8. 测试模式不修改生产文件
 """
 
 import os
@@ -48,9 +49,6 @@ def run():
             if "汇总表" in name:
                 summary_files.append(item)
 
-        logger.info(f"订单汇总表数量: {len(summary_files)}")
-        logger.info(f"完成文件数量: {len(complete_files)}")
-
         completion_records = []
         summary_records = []
 
@@ -59,35 +57,36 @@ def run():
                 target = Path(temp_dir) / item["name"]
                 drive.download_file(item["id"], str(target))
                 rows = read_excel(target)
-                if rows:
-                    completion_records.extend(rows)
+                completion_records.extend(rows or [])
 
             for item in summary_files:
                 target = Path(temp_dir) / item["name"]
                 drive.download_file(item["id"], str(target))
                 rows = read_excel(target)
-                if rows:
-                    summary_records.extend(rows)
+                summary_records.extend(rows or [])
 
             processed_index = build_processed_index(completion_records)
             remaining = build_remaining_records(summary_records, processed_index)
 
-            logger.info(f"累计加工记录数量: {len(processed_index)}")
-            logger.info(f"当前剩余记录数量: {len(remaining)}")
-
             output = Path(temp_dir) / "当前待加工零件.xlsx"
             generate_report(remaining, output)
 
-            logger.info(f"结果文件生成: {output}")
+            logger.info(f"生成结果: {output}")
+
+            if not test_mode:
+                target_folder = os.getenv("RESULT_FOLDER_ID", "")
+                if target_folder:
+                    drive.upload_file(str(output), target_folder)
+                    logger.info("结果文件已上传Drive")
+                else:
+                    logger.warning("未设置 RESULT_FOLDER_ID，跳过上传")
 
     except Exception as e:
-        logger.error(f"Drive/Excel处理失败: {e}")
+        logger.error(f"处理失败: {e}")
         raise
 
     if test_mode:
-        logger.info("只读测试完成，未执行写入操作")
-    else:
-        logger.info("结果生成完成，等待上传和归档流程接入")
+        logger.info("只读测试完成，未执行写入")
 
 
 if __name__ == "__main__":
