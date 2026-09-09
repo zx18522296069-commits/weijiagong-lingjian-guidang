@@ -26,8 +26,7 @@ def build_processed_index(records):
         material_id = normalize_material_id(row.get("板材编号"))
         drawing = str(row.get("图号", "")).strip()
         quantity = int(row.get("完成数量", 0) or 0)
-        key = (material_id, drawing)
-        result[key] += quantity
+        result[(material_id, drawing)] += quantity
     return dict(result)
 
 
@@ -37,7 +36,6 @@ def calculate_remaining(total_count, processed_count):
 
 
 def get_status(remaining):
-    """状态标识：0完成，正数未完成，负数异常"""
     if remaining == 0:
         return "完成"
     if remaining < 0:
@@ -46,7 +44,7 @@ def get_status(remaining):
 
 
 def build_remaining_records(order_records, processed_index):
-    """根据订单汇总和累计台账生成当前剩余明细"""
+    """生成当前待加工明细"""
     result = []
 
     for row in order_records:
@@ -65,3 +63,11 @@ def build_remaining_records(order_records, processed_index):
         })
 
     return result
+
+
+def is_order_completed(records):
+    """整单完成判断：订单内全部零件当前剩余为0才完成"""
+    return bool(records) and all(
+        int(row.get("当前剩余", 0) or 0) == 0
+        for row in records
+    )
