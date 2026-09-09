@@ -1,10 +1,32 @@
 """
-已录入数量归档
+已录入数量归档模块
 
-规则：
-完成核对并入账后，移动到已录入数量目录，避免重复扫描。
+正式规则：
+- 完成核对并入账后归档
+- 避免重复扫描
+- 保留历史记录
+- 整单完成后才允许移出
 """
 
+from datetime import datetime
 
-def archive_completed_file(file_id):
-    pass
+
+def should_archive(order_status):
+    """只有整单完成才归档"""
+    return order_status == "完成"
+
+
+def archive_completed_file(file_id, target_folder=None):
+    """
+    移动已完成文件
+
+    实际移动由 Google Drive 模块执行。
+    """
+    if not file_id:
+        return False
+
+    return {
+        "file_id": file_id,
+        "target_folder": target_folder,
+        "archive_time": datetime.now().isoformat()
+    }
