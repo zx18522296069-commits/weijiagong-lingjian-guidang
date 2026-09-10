@@ -1,76 +1,1 @@
-name: æœªåŠ å·¥é›¶ä»¶è‡ªåŠ¨æ›´æ–°
-
-on:
-  # ä¸´æ—¶ push è§¦å‘ä»…ç”¨äºæœ¬æ¬¡ä¸Šçº¿éªŒè¯ï¼›éªŒè¯å®Œæˆåç«‹å³åˆ é™¤ã€‚
-  push:
-    branches: [main]
-  schedule:
-    # GitHub Actions ä½¿ç”¨ UTCï¼š09:25 = åŒ—äº¬æ—¶é—´17:25ï¼›14:00 = åŒ—äº¬æ—¶é—´22:00
-    - cron: '25 9 * * *'
-    - cron: '0 14 * * *'
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: 'è¿è¡Œæ¨¡å¼'
-        required: true
-        default: 'test'
-        type: choice
-        options:
-          - test
-          - production
-
-permissions:
-  contents: read
-
-concurrency:
-  group: weijiagong-lingjian-guidang
-  cancel-in-progress: false
-
-jobs:
-  update:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    env:
-      PYTHONUNBUFFERED: '1'
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      DRIVE_ROOT_FOLDER_ID: '1zM-DIWR_7ruB-41G7VETmVmCnKqB2WqM'
-      WORKING_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
-      SPLIT_FOLDER_ID: '1lr9AUd9hO81Ylbkt4iJf88og4aazC797'
-      RESULT_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
-      ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
-      CUMULATIVE_FILE_ID: '1BDXfJN8afgla9Z9Al-tVQmqP107afkPb'
-      PENDING_FILE_ID: '1Lw91mzMQkqEx4sAn_U6JgHaDfa6bQpUG'
-
-      # å®šæ—¶ä»»åŠ¡æ­£å¼ç”Ÿäº§ï¼›æ‰‹åŠ¨é»˜è®¤ testï¼Œå¯æ˜¾å¼é€‰æ‹© productionã€‚
-      TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'test' && 'true' || 'false' }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Syntax check
-        run: python -m compileall -q main.py modules tests
-
-      - name: Regression tests
-        run: python -m unittest discover -s tests -v
-
-      - name: Run update
-        run: python main.py
-
-      - name: Save execution log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: update-log-${{ github.run_id }}
-          path: logs/
-          if-no-files-found: ignore
-          retention-days: 30
+k½üçWZ×_8ï‰šŠz+Š§şf¢­uóøõÆ÷×Öüß–İŞyçu×¾é­›ç—ë¿xs~7ó­´İ­4İÇ»Ñ­:Õ½{w~œó~İ¾¸Õ¹…µ”èƒšr«–*ƒ–Ş—¦nÛ’îÛ¢«–*£šnÓšZÀ()½¸è(€Í¡•‘Õ±”è(€€€€Œ¥Ñ!ÕˆÑ¥½¹Ìƒ’öÿR UQ¾òhÀäèÈÔ€ôƒ–2_’ê³š^Û¦^ĞÄÜèÈ×¾òlÄĞèÀÀ€ôƒ–2_’ê³š^Û¦^ĞÈÈèÀÀ(€€€€´É½¸è€œÈÔ€ä€¨€¨€¨œ(€€€€´É½¸è€œÀ€ÄĞ€¨€¨€¨œ(€İ½É­™±½İ}‘¥ÍÁ…Ñ è(€€€¥¹ÁÕÑÌè(€€€€€µ½‘”è(€€€€€€€‘•ÍÉ¥ÁÑ¥½¸è€Ÿ¢şC¢†3š¢‡–ò<œ(€€€€€€€É•ÅÕ¥É•èÑÉÕ”(€€€€€€€‘•™…Õ±Ğè€Ñ•ÍĞœ(€€€€€€€ÑåÁ”è¡½¥”(€€€€€€€½ÁÑ¥½¹Ìè(€€€€€€€€€€´Ñ•ÍĞ(€€€€€€€€€€´ÁÉ½‘ÕÑ¥½¸()Á•Éµ¥ÍÍ¥½¹Ìè(€½¹Ñ•¹ÑÌèÉ•…()½¹ÕÉÉ•¹äè(€É½ÕÀèİ•¥©¥…½¹œµ±¥¹©¥…¸µÕ¥‘…¹œ(€…¹•°µ¥¸µÁÉ½É•ÍÌè™…±Í”()©½‰Ìè(€ÕÁ‘…Ñ”è(€€€ÉÕ¹Ìµ½¸èÕ‰Õ¹ÑÔµ±…Ñ•ÍĞ(€€€Ñ¥µ•½ÕĞµµ¥¹ÕÑ•Ìè€ÌÀ((€€€•¹Øè(€€€€€AeQ!=9U9	UIè€œÄœ(€€€€€==1}MIY%}=U9Q})M=8è€‘íìÍ•É•ÑÌ¹==1}MIY%}=U9Q})M=8õô(€€€€€I%Y}I==Q}=1I}%è€œÅé4µ%]I|İÉÕ´ĞÅİYQµYµ¹-ÅÉ]Å4œ(€€€€€]=I-%9}=1I}%è€œÅA4Åi‰!¬ÉØÍiA™İ!‘ÅÉY}­!9é) œ(€€€€€MA1%Q}=1I}%è€œÅ±ÈåUå¡<àÅe±‰­ĞÑ¥)˜àá½œÑ……éÜäÜœ(€€€€€IMU1Q}=1I}%è€œÅA4Åi‰!¬ÉØÍiA™İ!‘ÅÉY}­!9é) œ(€€€€€I!%Y}=1I}%è€œÅeháÕ¥Ù	ˆÑá)èÙÅEÙÁÍÁ1µÁQE9Uèœ(€€€€€U5U1Q%Y}%1}%è€œÅ	a™)8á…™±„åhå°µÑYEµÅ@ÄÀİ…™­Aˆœ(€€€€€A9%9}%1}%è€œÅ1ÜäÅµé5E­ÅàÑÍ¹}TÙ)!…™„Ù‰EÁUœ((€€€€€€Œƒ–ºkš^Û’îï–*‡š¶–ò?R’êŸ¾òoš&/–*£¦îc¢ºÑ•ÍÓ¾ò3–>¿šbû–ò?¦'š.¤ÁÉ½‘ÕÑ¥½»(€€€€€QMQ}5=è€‘íì¥Ñ¡Õˆ¹•Ù•¹Ñ}¹…µ”€ôô€İ½É­™±½İ}‘¥ÍÁ…Ñ œ€˜˜¥¹ÁÕÑÌ¹µ½‘”€ôô€Ñ•ÍĞœ€˜˜€ÑÉÕ”œñğ€™…±Í”œõô((€€€ÍÑ•ÁÌè(€€€€€€´¹…µ”è¡•­½ÕĞ(€€€€€€€ÕÍ•Ìè…Ñ¥½¹Ì½¡•­½ÕÑØĞ((€€€€€€´¹…µ”èM•ÑÕÀAåÑ¡½¸(€€€€€€€ÕÍ•Ìè…Ñ¥½¹Ì½Í•ÑÕÀµÁåÑ¡½¹ØÔ(€€€€€€€İ¥Ñ è(€€€€€€€€€ÁåÑ¡½¸µÙ•ÉÍ¥½¸è€œÌ¸ÄÈœ((€€€€€€´¹…µ”è%¹ÍÑ…±°‘•Á•¹‘•¹¥•Ì(€€€€€€€ÉÕ¸èÁ¥À¥¹ÍÑ…±°€µÈÉ•ÅÕ¥É•µ•¹ÑÌ¹ÑáĞ((€€€€€€´¹…µ”èMå¹Ñ…à¡•¬(€€€€€€€ÉÕ¸èÁåÑ¡½¸€µ´½µÁ¥±•…±°€µÄµ…¥¸¹Áäµ½‘Õ±•ÌÑ•ÍÑÌ((€€€€€€´¹…µ”èI•É•ÍÍ¥½¸Ñ•ÍÑÌ(€€€€€€€ÉÕ¸èÁåÑ¡½¸€µ´Õ¹¥ÑÑ•ÍĞ‘¥Í½Ù•È€µÌÑ•ÍÑÌ€µØ((€€€€€€´¹…µ”èIÕ¸ÕÁ‘…Ñ”(€€€€€€€ÉÕ¸èÁåÑ¡½¸µ…¥¸¹Áä((€€€€€€´¹…µ”èM…Ù”•á•ÕÑ¥½¸±½œ(€€€€€€€¥˜è…±İ…åÌ ¤(€€€€€€€ÕÍ•Ìè…Ñ¥½¹Ì½ÕÁ±½…µ…ÉÑ¥™…ÑØĞ(€€€€€€€İ¥Ñ è(€€€€€€€€€¹…µ”èÕÁ‘…Ñ”µ±½œ´‘íì¥Ñ¡Õˆ¹ÉÕ¹}¥õô(€€€€€€€€€Á…Ñ è±½Ì¼(€€€€€€€€€¥˜µ¹¼µ™¥±•Ìµ™½Õ¹è¥¹½É”(€€€€€€€€€É•Ñ•¹Ñ¥½¸µ‘…åÌè€ÌÀ
