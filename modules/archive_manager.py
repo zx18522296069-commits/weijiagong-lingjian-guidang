@@ -2,18 +2,17 @@
 已录入数量归档模块
 
 正式规则：
-- 完成核对并入账后归档
-- 避免重复扫描
-- 保留历史记录
-- 整单完成后才允许移出
+- 单张板材完成文件经核对、写入永久台账并回读验证后即可归档
+- 归档只负责避免完成文件重复扫描，不删除永久历史
+- “整单完成才移除”只适用于《当前待加工零件》，不限制完成文件归档
 """
 
 from datetime import datetime
 
 
-def should_archive(order_status):
-    """只有整单完成才归档"""
-    return order_status == "完成"
+def should_archive(posted_and_verified):
+    """只有该板材已正式入账且回读验证通过，才允许归档完成文件。"""
+    return posted_and_verified is True
 
 
 def build_archive_record(order_id, files=None):

@@ -7,6 +7,7 @@ from openpyxl import Workbook, load_workbook
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
 from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
 from modules.idempotency import reconcile_posted_board
+from modules.archive_manager import should_archive
 from modules.process_parts import build_current_state, validate_new_board
 
 
@@ -85,6 +86,11 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertEqual(existing["historical_rows"][0]["remaining"], 0)
             self.assertEqual(existing["historical_rows"][0]["board_sources"], "#309×2")
             self.assertIn("#309", existing["posted_boards"])
+
+    def test_archive_requires_post_write_verification(self):
+        self.assertTrue(should_archive(True))
+        self.assertFalse(should_archive(False))
+        self.assertFalse(should_archive("完成"))
 
     def test_split_and_d53k_unique_suffix_match(self):
         with tempfile.TemporaryDirectory() as td:

@@ -19,9 +19,12 @@
 4. 使用授权凭证访问指定 Drive 目录。
 5. 执行前读取，执行后更新并归档。
 
-## 后续配置
+## 已完成配置
 
-- Google Drive API 服务账号
-- GitHub Secrets
-- 第一次云端只读测试
-- 第一次完整写入测试
+- [x] Google Drive API 服务账号
+- [x] GitHub Secret
+- [x] 云端只读测试
+- [x] 正式生产写入与回读验证
+- [x] 北京时间17:25、22:00定时生产任务
+
+服务账号密钥只保存在 GitHub Secret `GOOGLE_SERVICE_ACCOUNT_JSON` 中，不写入仓库。

@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -128,9 +127,6 @@ def run():
     pending_files = drive.list_pending_split_files()
     logger.info(f"发现订单原始汇总表 {len(source_files)} 个")
     logger.info(f"拆图结果根目录待处理完成文件 {len(pending_files)} 个")
-
-    artifact_dir = Path("artifacts")
-    artifact_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as temp_dir_str:
         temp_dir = Path(temp_dir_str)
@@ -277,9 +273,6 @@ def run():
         )
         generate_pending_report(active_state_rows, pending_out, note=run_note)
         _verify_output_workbooks(cumulative_out, pending_out)
-
-        shutil.copy2(cumulative_out, artifact_dir / "累计加工台账_测试生成.xlsx")
-        shutil.copy2(pending_out, artifact_dir / "当前待加工零件_测试生成.xlsx")
 
         if test_mode:
             logger.info("只读测试完成：未写回 Drive、未移动任何拆图结果文件")

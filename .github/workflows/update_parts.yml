@@ -1,6 +1,9 @@
 name: 未加工零件自动更新
 
 on:
+  # 临时 push 触发仅用于本次上线验证；验证完成后立即删除。
+  push:
+    branches: [main]
   schedule:
     # GitHub Actions 使用 UTC：09:25 = 北京时间17:25；14:00 = 北京时间22:00
     - cron: '25 9 * * *'
@@ -55,7 +58,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Syntax check
-        run: python -m compileall -q main.py modules
+        run: python -m compileall -q main.py modules tests
+
+      - name: Regression tests
+        run: python -m unittest discover -s tests -v
 
       - name: Run update
         run: python main.py
@@ -68,12 +74,3 @@ jobs:
           path: logs/
           if-no-files-found: ignore
           retention-days: 30
-
-      - name: Save generated workbooks
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-workbooks-${{ github.run_id }}
-          path: artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
