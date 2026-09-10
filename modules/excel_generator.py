@@ -121,8 +121,8 @@ def _write_order_sections(ws, rows: list[dict], *, include_completed_orders: boo
             ws.cell(row_cursor, 10).font = Font(size=14, bold=True)
             fill = _status_fill(r["status"])
             if fill:
-                ws.cell(row_cursor, 10).fill = fill
-                ws.cell(row_cursor, 12).fill = fill
+                for col in range(1, 13):
+                    ws.cell(row_cursor, col).fill = fill
             row_cursor += 1
 
         row_cursor += 1
