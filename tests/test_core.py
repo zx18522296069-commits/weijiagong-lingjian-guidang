@@ -176,6 +176,49 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(j_cells[0].font.bold)
             self.assertEqual(j_cells[0].fill.fgColor.rgb[-6:], "FFF2CC")
 
+    def test_status_fill_covers_entire_detail_row(self):
+        rows = []
+        statuses = [
+            ("已完成", 2, 0, 0.0, "E2F0D9"),
+            ("部分完成", 1, 1, 0.5, "FFF2CC"),
+            ("超加工/待核查", 3, -1, -0.5, "F4CCCC"),
+        ]
+        for index, (status, processed, remaining, pending_weight, _) in enumerate(statuses, start=1):
+            rows.append({
+                "order": "STATUS-COLOR-TEST",
+                "drawing": f"COLOR-{index}",
+                "thickness": 60,
+                "bevel": "",
+                "length": 1000,
+                "width": 500,
+                "quantity": 2,
+                "total_weight_t": 1.0,
+                "board_sources": "TEST",
+                "processed": processed,
+                "remaining": remaining,
+                "pending_weight_t": pending_weight,
+                "status": status,
+            })
+
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "状态颜色整行测试.xlsx"
+            generate_cumulative_report(rows, [], [], [], output, note="状态颜色回归测试")
+            ws = load_workbook(output)["累计加工台账"]
+
+            detail_rows = {
+                ws.cell(row, 1).value: row
+                for row in range(1, ws.max_row + 1)
+                if isinstance(ws.cell(row, 1).value, str) and ws.cell(row, 1).value.startswith("COLOR-")
+            }
+            self.assertEqual(set(detail_rows), {"COLOR-1", "COLOR-2", "COLOR-3"})
+
+            for index, (_, _, _, _, expected_color) in enumerate(statuses, start=1):
+                row = detail_rows[f"COLOR-{index}"]
+                actual_colors = [ws.cell(row, col).fill.fgColor.rgb[-6:] for col in range(1, 13)]
+                self.assertEqual(actual_colors, [expected_color] * 12)
+                self.assertTrue(ws.cell(row, 10).font.bold)
+                self.assertEqual(ws.cell(row, 10).font.sz, 14)
+
 
 if __name__ == "__main__":
     unittest.main()
