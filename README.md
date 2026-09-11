@@ -31,3 +31,13 @@
 - 代码自检和业务回归测试已启用。
 - 生产 Excel 只保存在 Google Drive，不保存为 GitHub Actions artifact；GitHub 仅保存代码与执行日志。
 - 无法唯一匹配或原始资料缺失的板材会阻断入账并保留在“拆图结果”根目录，禁止猜测处理。
+
+## Google Drive 凭据
+
+个人网盘写入推荐使用用户 OAuth，两个自动化仓库配置同一组三项 Actions secrets：
+
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REFRESH_TOKEN`
+
+三项齐全时程序优先使用 OAuth；未设置时兼容原 `GOOGLE_SERVICE_ACCOUNT_JSON`。服务账号没有个人 Drive 存储额度，因此只能把它作为 Shared Drive 或只更新既有文件的后备方式。

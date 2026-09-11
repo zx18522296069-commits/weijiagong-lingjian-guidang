@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 from pathlib import Path
-from typing import Iterable
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+from modules.google_auth import build_credentials, check_auth_config
+
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -24,12 +22,11 @@ class DriveManager:
         self.working_folder_id = os.getenv("WORKING_FOLDER_ID", "")
         self.split_folder_id = os.getenv("SPLIT_FOLDER_ID", "")
         self.archive_folder_id = os.getenv("ARCHIVE_FOLDER_ID", "")
-        self.credentials_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
         self.service = None
 
     def check_config(self) -> bool:
         return bool(
-            self.credentials_json
+            check_auth_config()
             and self.root_folder_id
             and self.working_folder_id
             and self.split_folder_id
@@ -37,10 +34,7 @@ class DriveManager:
         )
 
     def connect(self):
-        if not self.credentials_json:
-            raise RuntimeError("缺少 GOOGLE_SERVICE_ACCOUNT_JSON")
-        info = json.loads(self.credentials_json)
-        credentials = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+        credentials = build_credentials()
         self.service = build("drive", "v3", credentials=credentials, cache_discovery=False)
         return self.service
 
