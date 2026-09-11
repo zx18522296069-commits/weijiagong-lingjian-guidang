@@ -42,8 +42,14 @@ def normalize_order_key(value: str) -> str:
     text = _text(value)
     if not text:
         return ""
+    # 兼容人工命名时在连字符两侧误加空格，例如：
+    # “THP10-8000J -0911”应视为“THP10-8000J-0911”。
+    text = re.sub(r"\s*-\s*", "-", text)
     parts = [p for p in re.split(r"\s+", text) if p]
-    # 首段为内部编号时，紧随其后的字段才是唯一订单号；后续文字只是状态说明。
+    # 订单目录允许在真实订单号后附加状态说明，例如：
+    # “159.26-07-15  YT71S-2500Z-0715 已做完核算表”。
+    # 只有首段是内部编号时才去掉它，并取紧随其后的真实订单号；
+    # 不能取最后一段，否则会把“已做完核算表”误认为订单号。
     if len(parts) >= 2 and re.fullmatch(r"\d+\.\d{2}-\d{2}-\d{2}", parts[0]):
         return parts[1]
     return text
