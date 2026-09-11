@@ -5,7 +5,12 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
-from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
+from modules.excel_reader import (
+    normalize_order_key,
+    read_existing_ledger,
+    read_source_summary,
+    read_split_result,
+)
 from modules.idempotency import reconcile_posted_board
 from modules.archive_manager import should_archive
 from modules.process_parts import build_current_state, validate_new_board
@@ -99,6 +104,12 @@ class CoreWorkflowTests(unittest.TestCase):
                 order_container_name="159.26-07-15  YT71S-2500Z-0715 已做完核算表",
             )
             self.assertEqual(rows[0]["order"], "YT71S-2500Z-0715")
+
+    def test_order_folder_uses_unique_order_number_not_status_text(self):
+        self.assertEqual(
+            normalize_order_key("182.26-08-25  THP11-10000Q-0825 已做完核算表"),
+            "THP11-10000Q-0825",
+        )
 
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
