@@ -91,6 +91,31 @@ def _pick_header(headers: dict[str, int], *candidates: str) -> tuple[str, int] |
     return None, None
 
 
+def _infer_unlabelled_bevel_column(ws, header_row: int, headers: dict[str, int],
+                                   order_col: int, drawing_col: int) -> int | None:
+    """识别旧模板中表头为空、但明细值明确为 P/W 的坡口列。"""
+    max_row, max_column = _worksheet_bounds(ws)
+    labelled_columns = set(headers.values())
+    candidates: list[int] = []
+
+    for col in range(1, max_column + 1):
+        if col in labelled_columns:
+            continue
+        values: list[str] = []
+        for row in range(header_row + 1, max_row + 1):
+            order = _text(ws.cell(row, order_col).value)
+            drawing = _text(ws.cell(row, drawing_col).value)
+            if not order and not drawing:
+                continue
+            value = _text(ws.cell(row, col).value).upper()
+            if value:
+                values.append(value)
+        if values and all(value in {"P", "W"} for value in values):
+            candidates.append(col)
+
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def read_source_summary(path, *, source_name: str = "", order_container_name: str = "") -> list[dict]:
     """读取订单原始汇总表，重量统一为吨；长宽、数量、坡口直接来自原始汇总表。"""
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -118,6 +143,10 @@ def read_source_summary(path, *, source_name: str = "", order_container_name: st
             "重量(kg)", "重量（kg）", "重量(KG)", "重量（KG）",
             "重量",
         )
+        if not bevel_col and order_col and drawing_col:
+            bevel_col = _infer_unlabelled_bevel_column(
+                ws, header_row, headers, order_col, drawing_col
+            )
         if not all([order_col, drawing_col, thickness_col, qty_col, length_col, width_col, bevel_col, weight_col]):
             raise ValueError(f"原始汇总表缺少正式必需字段: {source_label}")
 
