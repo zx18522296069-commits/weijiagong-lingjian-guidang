@@ -1,6 +1,9 @@
 name: 未加工零件自动更新
 
 on:
+  push:
+    branches:
+      - oauth-validation
   schedule:
     - cron: '25 9 * * *'
     - cron: '0 14 * * *'
@@ -41,8 +44,8 @@ jobs:
       CUMULATIVE_FILE_ID: '1BDXfJN8afgla9Z9Al-tVQmqP107afkPb'
       PENDING_FILE_ID: '1Lw91mzMQkqEx4sAn_U6JgHaDfa6bQpUG'
 
-      # 定时任务正式生产；手动默认 test，可显式选择 production。
-      TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'test' && 'true' || 'false' }}
+      # 定时任务正式生产；手动默认 test；验证分支始终强制 test。
+      TEST_MODE: ${{ (github.ref == 'refs/heads/oauth-validation' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'test')) && 'true' || 'false' }}
 
     steps:
       - name: Checkout
