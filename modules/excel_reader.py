@@ -42,6 +42,9 @@ def normalize_order_key(value: str) -> str:
     text = _text(value)
     if not text:
         return ""
+    # 兼容人工命名时在连字符两侧误加空格，例如：
+    # “THP10-8000J -0911”应视为“THP10-8000J-0911”。
+    text = re.sub(r"\s*-\s*", "-", text)
     parts = [p for p in re.split(r"\s+", text) if p]
     # 订单目录允许在真实订单号后附加状态说明，例如：
     # “159.26-07-15  YT71S-2500Z-0715 已做完核算表”。
