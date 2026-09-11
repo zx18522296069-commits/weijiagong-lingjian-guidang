@@ -5,20 +5,25 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
-from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
+from modules.excel_reader import (
+    normalize_order_key,
+    read_existing_ledger,
+    read_source_summary,
+    read_split_result,
+)
 from modules.idempotency import reconcile_posted_board
 from modules.archive_manager import should_archive
 from modules.process_parts import build_current_state, validate_new_board
 
 
 class CoreWorkflowTests(unittest.TestCase):
-    def _make_source(self, path: Path, *, kg=False):
+    def _make_source(self, path: Path, *, kg=False, blank_bevel_header=False):
         wb = Workbook()
         ws = wb.active
         ws["A1"] = "订单汇总表"
         headers = [
             "订单号", "图号", "厚度", "件数", "长(mm)", "宽(mm)",
-            "切割长度(mm)", "净面积(m²)", "坡口",
+            "切割长度(mm)", "净面积(m²)", "" if blank_bevel_header else "坡口",
             "总净重(kg)" if kg else "总净重(t)", "核对备注",
         ]
         for c, value in enumerate(headers, 1):
@@ -76,6 +81,35 @@ class CoreWorkflowTests(unittest.TestCase):
             rows = read_source_summary(path)
             self.assertEqual(rows[0]["order"], "D53K-1600A-0805")
             self.assertAlmostEqual(rows[0]["total_weight_t"], 1.5154425)
+
+    def test_source_parser_infers_unique_unlabelled_bevel_column(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "legacy-template.xlsm"
+            self._make_source(path, blank_bevel_header=True)
+            rows = read_source_summary(path)
+            self.assertEqual(rows[0]["bevel"], "W")
+
+    def test_source_parser_accepts_status_suffix_in_order_folder(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "YT71S-2500Z-0715 模板.xlsm"
+            self._make_source(path)
+            wb = load_workbook(path)
+            ws = wb.active
+            ws["A5"] = "YT71S-2500Z-0715"
+            wb.save(path)
+
+            rows = read_source_summary(
+                path,
+                source_name=path.name,
+                order_container_name="159.26-07-15  YT71S-2500Z-0715 已做完核算表",
+            )
+            self.assertEqual(rows[0]["order"], "YT71S-2500Z-0715")
+
+    def test_order_folder_uses_unique_order_number_not_status_text(self):
+        self.assertEqual(
+            normalize_order_key("182.26-08-25  THP11-10000Q-0825 已做完核算表"),
+            "THP11-10000Q-0825",
+        )
 
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
