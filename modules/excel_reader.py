@@ -43,8 +43,9 @@ def normalize_order_key(value: str) -> str:
     if not text:
         return ""
     parts = [p for p in re.split(r"\s+", text) if p]
-    if len(parts) >= 2:
-        return parts[-1]
+    # 首段为内部编号时，紧随其后的字段才是唯一订单号；后续文字只是状态说明。
+    if len(parts) >= 2 and re.fullmatch(r"\d+\.\d{2}-\d{2}-\d{2}", parts[0]):
+        return parts[1]
     return text
 
 
