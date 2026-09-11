@@ -19,10 +19,12 @@ def _flow_key(row: dict) -> tuple:
     )
 
 
-def _aggregate_flows(rows: list[dict], board_id: str) -> dict[tuple, int]:
+def _aggregate_flows(rows: list[dict], board_id: str, content_fingerprint: str = "") -> dict[tuple, int]:
     result: dict[tuple, int] = defaultdict(int)
     for row in rows:
         if _text(row.get("板材号")) != board_id:
+            continue
+        if content_fingerprint and _text(row.get("内容指纹")) != content_fingerprint:
             continue
         try:
             qty = int(round(float(row.get("本张板加工数量") or 0)))
@@ -40,6 +42,7 @@ def reconcile_posted_board(
     source_records: list[dict],
     existing_flows: list[dict],
     existing_board_records: list[dict],
+    content_fingerprint: str = "",
 ) -> dict:
     """
     如果板材号已在永久台账中，但原完成文件仍留在拆图结果根目录，
@@ -61,7 +64,7 @@ def reconcile_posted_board(
     for row in expected["flows"]:
         expected_flows[_flow_key(row)] += int(row["本张板加工数量"])
     expected_flows = dict(expected_flows)
-    actual_flows = _aggregate_flows(existing_flows, board_id)
+    actual_flows = _aggregate_flows(existing_flows, board_id, content_fingerprint)
     if actual_flows != expected_flows:
         return {
             "ok": False,
@@ -71,6 +74,7 @@ def reconcile_posted_board(
     board_records = [
         row for row in existing_board_records
         if _text(row.get("板材号")) == board_id
+        and (not content_fingerprint or _text(row.get("内容指纹")) == content_fingerprint)
         and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
     ]
     if not board_records:
