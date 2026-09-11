@@ -12,13 +12,13 @@ from modules.process_parts import build_current_state, validate_new_board
 
 
 class CoreWorkflowTests(unittest.TestCase):
-    def _make_source(self, path: Path, *, kg=False):
+    def _make_source(self, path: Path, *, kg=False, blank_bevel_header=False):
         wb = Workbook()
         ws = wb.active
         ws["A1"] = "订单汇总表"
         headers = [
             "订单号", "图号", "厚度", "件数", "长(mm)", "宽(mm)",
-            "切割长度(mm)", "净面积(m²)", "坡口",
+            "切割长度(mm)", "净面积(m²)", "" if blank_bevel_header else "坡口",
             "总净重(kg)" if kg else "总净重(t)", "核对备注",
         ]
         for c, value in enumerate(headers, 1):
@@ -76,6 +76,13 @@ class CoreWorkflowTests(unittest.TestCase):
             rows = read_source_summary(path)
             self.assertEqual(rows[0]["order"], "D53K-1600A-0805")
             self.assertAlmostEqual(rows[0]["total_weight_t"], 1.5154425)
+
+    def test_source_parser_infers_unique_unlabelled_bevel_column(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "legacy-template.xlsm"
+            self._make_source(path, blank_bevel_header=True)
+            rows = read_source_summary(path)
+            self.assertEqual(rows[0]["bevel"], "W")
 
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
