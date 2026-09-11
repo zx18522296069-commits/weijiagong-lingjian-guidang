@@ -24,7 +24,12 @@ from openpyxl import load_workbook
 
 from modules.drive_manager import DriveManager
 from modules.excel_generator import generate_cumulative_report, generate_pending_report
-from modules.excel_reader import read_existing_ledger, read_source_summary, read_split_result
+from modules.excel_reader import (
+    normalize_order_key,
+    read_existing_ledger,
+    read_source_summary,
+    read_split_result,
+)
 from modules.idempotency import reconcile_posted_board
 from modules.logger import get_logger
 from modules.process_parts import (
@@ -137,24 +142,51 @@ def run():
         existing = read_existing_ledger(current_ledger_path)
         logger.info(f"永久入账板材数 {len(existing['posted_boards'])}")
 
-        # 2) 读取所有当前订单原始汇总表。任何源文件结构异常都停止正式输出。
+        # 2) 读取所有当前订单原始汇总表。单个订单资料异常时冻结该订单，
+        # 其余订单继续处理；异常原因写入运行结果，避免一张问题表拖垮整批任务。
         source_records: list[dict] = []
+        source_errors: list[dict] = []
         for idx, item in enumerate(source_files, start=1):
             local = temp_dir / f"source_{idx}_{Path(item['name']).name}"
             drive.download_file(item["id"], str(local))
-            records = read_source_summary(
-                local,
-                source_name=item["name"],
-                order_container_name=item.get("order_container_name", ""),
-            )
+            container_name = item.get("order_container_name", "")
+            try:
+                records = read_source_summary(
+                    local,
+                    source_name=item["name"],
+                    order_container_name=container_name,
+                )
+            except ValueError as error:
+                order = normalize_order_key(container_name)
+                source_errors.append({
+                    "order": order,
+                    "source": container_name or item["name"],
+                    "reason": str(error),
+                })
+                logger.warning(
+                    f"订单源未完成 {order or container_name or item['name']}: {error}"
+                )
+                continue
             source_records.extend(records)
-            logger.info(f"读取订单源 {item.get('order_container_name') or item['name']}：{len(records)} 条零件")
+            logger.info(f"读取订单源 {container_name or item['name']}：{len(records)} 条零件")
 
         source_index = build_source_index(source_records)
         logger.info(f"当前订单原始零件总条数 {len(source_records)}")
 
         # 累计台账永久性保护：已完成退出订单保留；未完成却丢失源文件则阻断。
-        completed_history, missing_incomplete = _split_historical_rows(existing, source_index)
+        unavailable_orders = {item["order"] for item in source_errors if item["order"]}
+        frozen_source_rows = [
+            row for row in existing.get("historical_rows", [])
+            if row.get("order") in unavailable_orders
+        ]
+        history_for_check = {
+            **existing,
+            "historical_rows": [
+                row for row in existing.get("historical_rows", [])
+                if row.get("order") not in unavailable_orders
+            ],
+        }
+        completed_history, missing_incomplete = _split_historical_rows(history_for_check, source_index)
         if missing_incomplete:
             affected_orders = sorted({row["order"] for row in missing_incomplete})
             examples = ", ".join(
@@ -167,6 +199,10 @@ def run():
             )
         if completed_history:
             logger.info(f"永久累计台账保留已退出的完成历史零件 {len(completed_history)} 条")
+        if frozen_source_rows:
+            logger.warning(
+                f"因订单源异常冻结历史数据 {len(frozen_source_rows)} 条，保持上次结果不变"
+            )
 
         # 3) 逐板预校验；整板任一行失败则整板阻断。
         delta_by_key: dict[tuple, int] = defaultdict(int)
@@ -242,6 +278,7 @@ def run():
             delta_by_key=dict(delta_by_key),
             source_additions=dict(source_additions),
         )
+        active_state_rows.extend(frozen_source_rows)
         cumulative_state_rows = active_state_rows + completed_history
 
         total_remaining = sum(int(r["remaining"]) for r in active_state_rows)
@@ -250,7 +287,8 @@ def run():
         logger.info(f"生成后活动订单当前未出重量 {total_pending_weight:.3f} t")
 
         run_note = (
-            f"自动执行：扫描订单源{len(source_files)}个、待处理板材{len(pending_files)}张；"
+            f"自动执行：扫描订单源{len(source_files)}个、成功读取{len(source_files) - len(source_errors)}个、"
+            f"未完成{len(source_errors)}个、待处理板材{len(pending_files)}张；"
             f"本次新入账{len(accepted_files)}张、补归档候选{len(reconciled_files)}张、阻断{len(blocked)}张；"
             f"永久保留已退出完成历史{len(completed_history)}条。"
             "所有尺寸、订单数量、基础总重量均以正在加工目录原始汇总表为事实源；"
@@ -276,6 +314,11 @@ def run():
 
         if test_mode:
             logger.info("只读测试完成：未写回 Drive、未移动任何拆图结果文件")
+            if source_errors:
+                for item in source_errors:
+                    logger.warning(
+                        f"未完成订单 {item['order'] or item['source']}: {item['reason']}"
+                    )
             if reconciled_files:
                 logger.info(f"测试发现 {len(reconciled_files)} 张已入账但尚未归档的文件，可在正式模式安全补归档")
             if blocked:
