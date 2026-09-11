@@ -111,6 +111,12 @@ class CoreWorkflowTests(unittest.TestCase):
             "THP11-10000Q-0825",
         )
 
+    def test_order_folder_ignores_spaces_around_hyphen(self):
+        self.assertEqual(
+            normalize_order_key("190.26-09-11   THP10-8000J -0911 已做完核算表 待审"),
+            "THP10-8000J-0911",
+        )
+
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "ledger.xlsx"
