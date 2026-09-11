@@ -386,6 +386,20 @@ def read_existing_ledger(path) -> dict:
         if _text(row.get("板材号"))
         and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
     }
+    posted_board_keys = {
+        (_text(row.get("板材号")), _text(row.get("内容指纹")))
+        for row in board_records
+        if _text(row.get("板材号"))
+        and _text(row.get("内容指纹"))
+        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
+    }
+    legacy_posted_boards = {
+        _text(row.get("板材号"))
+        for row in board_records
+        if _text(row.get("板材号"))
+        and not _text(row.get("内容指纹"))
+        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
+    }
 
     return {
         "state": state,
@@ -394,6 +408,8 @@ def read_existing_ledger(path) -> dict:
         "board_records": board_records,
         "anomalies": anomalies,
         "posted_boards": posted_boards,
+        "posted_board_keys": posted_board_keys,
+        "legacy_posted_boards": legacy_posted_boards,
     }
 
 

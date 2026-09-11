@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -19,6 +21,28 @@ def _thickness(value) -> float:
 
 def part_key(order: str, drawing: str, thickness, bevel: str) -> tuple:
     return (_text(order), _text(drawing), _thickness(thickness), _text(bevel))
+
+
+def board_content_fingerprint(split_payload: dict) -> str:
+    """以规范化业务内容识别同一张板；与文件名、行顺序无关。"""
+    rows = []
+    for row in split_payload.get("rows", []):
+        rows.append({
+            "order": _text(row.get("order")),
+            "drawing": _text(row.get("drawing")),
+            "thickness": float(row.get("thickness") or 0),
+            "bevel": _text(row.get("bevel")),
+            "base_quantity": int(row.get("base_quantity") or 0),
+            "split_quantity": int(row.get("split_quantity") or 0),
+            "base_total_weight_t": round(float(row.get("base_total_weight_t") or 0), 9),
+        })
+    canonical = json.dumps(
+        sorted(rows, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def build_source_index(source_records: list[dict]) -> dict[tuple, dict]:
@@ -112,21 +136,9 @@ def validate_new_board(
     对一张新板做全量预校验。任何一行失败，则整张板阻断，不产生正式入账流水。
     """
     today = datetime.now(BEIJING_TZ).date().isoformat()
-    if board_id in posted_boards:
-        return {
-            "ok": False,
-            "error": f"板材号 {board_id} 已存在正式入账记录，禁止重复入账",
-            "anomaly": {
-                "板材号": board_id,
-                "业务日期": today,
-                "订单号": "",
-                "图号": "",
-                "厚度(mm)": "",
-                "数量": sum(int(r.get("split_quantity", 0)) for r in split_payload.get("rows", [])),
-                "异常类型": "阻断入账",
-                "说明": "板材号已在永久入账记录中存在；为防重复累计，文件保留在拆图结果根目录。",
-            },
-        }
+    # 板材号允许重复；真正的去重键是“板材号 + 内容指纹”，由主流程在
+    # 全量校验前判断。保留 posted_boards 参数仅兼容既有调用。
+    content_fingerprint = board_content_fingerprint(split_payload)
 
     matched = []
     try:
@@ -168,6 +180,7 @@ def validate_new_board(
             note_parts.append(f"图号按唯一规范化由{split['drawing']}匹配{source['drawing']}")
         flows.append({
             "板材号": board_id,
+            "内容指纹": content_fingerprint,
             "拆图结果文件": filename,
             "图号": source["drawing"],
             "厚度(mm)": source["thickness"],
@@ -203,6 +216,7 @@ def validate_new_board(
     board_record = {
         "数据性质": "正式入账",
         "板材号": board_id,
+        "内容指纹": content_fingerprint,
         "拆图结果文件": filename,
         "计入件数": total_qty,
         "状态": "已核验并入账",
@@ -215,6 +229,7 @@ def validate_new_board(
         "board_sources": dict(board_sources),
         "flows": flows,
         "board_record": board_record,
+        "content_fingerprint": content_fingerprint,
         "anomaly": anomaly,
     }
 

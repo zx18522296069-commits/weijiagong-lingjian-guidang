@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -14,6 +15,7 @@ from modules.excel_reader import (
 from modules.idempotency import reconcile_posted_board
 from modules.archive_manager import should_archive
 from modules.process_parts import build_current_state, validate_new_board
+from modules.process_parts import board_content_fingerprint
 
 
 class CoreWorkflowTests(unittest.TestCase):
@@ -116,6 +118,18 @@ class CoreWorkflowTests(unittest.TestCase):
             normalize_order_key("190.26-09-11   THP10-8000J -0911 已做完核算表 待审"),
             "THP10-8000J-0911",
         )
+
+    def test_same_board_number_uses_content_to_distinguish_materials(self):
+        first = {"rows": [{
+            "order": "YT71S-2500Z-0715", "drawing": "A1", "thickness": 50,
+            "bevel": "", "base_quantity": 10, "split_quantity": 2,
+            "base_total_weight_t": 1.25,
+        }]}
+        same = deepcopy(first)
+        different = deepcopy(first)
+        different["rows"][0]["split_quantity"] = 3
+        self.assertEqual(board_content_fingerprint(first), board_content_fingerprint(same))
+        self.assertNotEqual(board_content_fingerprint(first), board_content_fingerprint(different))
 
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:

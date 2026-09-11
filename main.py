@@ -4,7 +4,7 @@
 1. 只扫描“正在加工”订单源（支持文件夹快捷方式）
 2. 读取永久累计台账
 3. 只扫描“拆图结果”根目录直接的 *_完成.xlsx
-4. 按完整板材号去重并逐板核验
+4. 按“完整板材号 + 文件业务内容”去重并逐板核验
 5. 更新累计台账与当前待加工零件
 6. 回读验证成功后，才把已成功入账的拆图结果移入“已录入数量”
 
@@ -33,6 +33,7 @@ from modules.excel_reader import (
 from modules.idempotency import reconcile_posted_board
 from modules.logger import get_logger
 from modules.process_parts import (
+    board_content_fingerprint,
     build_current_state,
     build_source_index,
     validate_new_board,
@@ -216,6 +217,8 @@ def run():
 
         anomaly_seen = {_anomaly_signature(r) for r in existing["anomalies"]}
         posted_boards = set(existing["posted_boards"])
+        posted_board_keys = set(existing.get("posted_board_keys", set()))
+        legacy_posted_boards = set(existing.get("legacy_posted_boards", set()))
 
         for idx, item in enumerate(sorted(pending_files, key=lambda x: x.get("name", "")), start=1):
             filename = item["name"]
@@ -223,28 +226,34 @@ def run():
             local = temp_dir / f"pending_{idx}_{Path(filename).name}"
             drive.download_file(item["id"], str(local))
             payload = read_split_result(local, board_id=board_id, source_name=filename)
+            content_fingerprint = board_content_fingerprint(payload)
 
             # 上次可能已经成功写入台账，但在“移动到已录入数量”之前中断。
             # 这种情况不能再次累计；只有根目录文件与永久台账完全一致时，才允许补归档。
-            if board_id in posted_boards:
+            exact_duplicate = (board_id, content_fingerprint) in posted_board_keys
+            legacy_candidate = board_id in legacy_posted_boards
+            if exact_duplicate or legacy_candidate:
                 recovery = reconcile_posted_board(
                     board_id=board_id,
                     filename=filename,
                     split_payload=payload,
                     source_records=source_records,
-                    existing_flows=existing["flows"],
-                    existing_board_records=existing["board_records"],
+                    existing_flows=existing["flows"] + new_flows,
+                    existing_board_records=existing["board_records"] + new_board_records,
+                    content_fingerprint=content_fingerprint if exact_duplicate else "",
                 )
                 if recovery["ok"]:
-                    reconciled_files.append({**item, "board_id": board_id})
+                    reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
                     logger.info(f"板材 {board_id} 已入账且内容一致：本轮只补归档，不重复累计")
-                else:
+                    continue
+                if exact_duplicate:
                     reason = recovery["reason"]
                     blocked.append((board_id, reason))
                     qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
                     _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
                     logger.warning(f"板材 {board_id} 已入账但根目录文件无法安全补归档：{reason}")
-                continue
+                    continue
+                logger.info(f"板材 {board_id} 编号重复但内容不同：按新板材继续校验并分别入账")
 
             result = validate_new_board(
                 board_id=board_id,
@@ -267,8 +276,9 @@ def run():
             new_flows.extend(result["flows"])
             new_board_records.append(result["board_record"])
             _append_unique_anomaly(new_anomalies, anomaly_seen, result["anomaly"])
-            accepted_files.append({**item, "board_id": board_id})
+            accepted_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
             posted_boards.add(board_id)
+            posted_board_keys.add((board_id, content_fingerprint))
             logger.info(f"板材 {board_id} 校验通过：计入 {result['board_record']['计入件数']} 件")
 
         # 4) 以当前原始资料 + 既有累计 + 本次增量生成活动订单状态。
@@ -337,8 +347,11 @@ def run():
         drive.download_file(pending_file_id, str(verify_pending))
         _verify_output_workbooks(verify_cumulative, verify_pending)
         verified_ledger = read_existing_ledger(verify_cumulative)
-        verify_board_ids = [item["board_id"] for item in accepted_files + reconciled_files]
-        missing_boards = [board_id for board_id in verify_board_ids if board_id not in verified_ledger["posted_boards"]]
+        missing_boards = [
+            item["board_id"]
+            for item in accepted_files
+            if (item["board_id"], item["content_fingerprint"]) not in verified_ledger.get("posted_board_keys", set())
+        ]
         if missing_boards:
             raise RuntimeError(f"写回后板材入账记录验证失败: {missing_boards}")
         logger.info("正式文件回读验证通过")
