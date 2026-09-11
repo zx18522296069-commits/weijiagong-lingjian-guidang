@@ -84,6 +84,22 @@ class CoreWorkflowTests(unittest.TestCase):
             rows = read_source_summary(path)
             self.assertEqual(rows[0]["bevel"], "W")
 
+    def test_source_parser_accepts_status_suffix_in_order_folder(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "YT71S-2500Z-0715 模板.xlsm"
+            self._make_source(path)
+            wb = load_workbook(path)
+            ws = wb.active
+            ws["A5"] = "YT71S-2500Z-0715"
+            wb.save(path)
+
+            rows = read_source_summary(
+                path,
+                source_name=path.name,
+                order_container_name="159.26-07-15  YT71S-2500Z-0715 已做完核算表",
+            )
+            self.assertEqual(rows[0]["order"], "YT71S-2500Z-0715")
+
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "ledger.xlsx"
