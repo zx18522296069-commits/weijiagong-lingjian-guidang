@@ -50,6 +50,20 @@ def reconcile_posted_board(
     才判定为上次写入后归档步骤中断，可在本轮回读验证后补归档。
     否则阻断，绝不再次累计。
     """
+    board_records = [
+        row for row in existing_board_records
+        if _text(row.get("板材号")) == board_id
+        and (not content_fingerprint or _text(row.get("内容指纹")) == content_fingerprint)
+        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
+    ]
+    latest = board_records[-1] if board_records else {}
+    historical_proof = {
+        "board_id": board_id,
+        "filename": _text(latest.get("拆图结果文件")),
+        "quantity": _text(latest.get("计入件数")),
+        "status": _text(latest.get("状态")),
+    }
+
     expected = validate_new_board(
         board_id=board_id,
         filename=filename,
@@ -58,7 +72,12 @@ def reconcile_posted_board(
         posted_boards=set(),
     )
     if not expected["ok"]:
-        return {"ok": False, "reason": f"已入账板材的根目录文件重新校验失败：{expected['error']}"}
+        return {
+            "ok": False,
+            "comparable": False,
+            "historical_proof": historical_proof,
+            "reason": f"已入账板材的根目录文件重新校验失败：{expected['error']}",
+        }
 
     expected_flows: dict[tuple, int] = defaultdict(int)
     for row in expected["flows"]:
@@ -68,32 +87,30 @@ def reconcile_posted_board(
     if actual_flows != expected_flows:
         return {
             "ok": False,
+            "comparable": True,
+            "historical_proof": historical_proof,
             "reason": f"已入账板材与永久加工流水不一致：文件={expected_flows}，台账净流水={actual_flows}",
         }
 
-    board_records = [
-        row for row in existing_board_records
-        if _text(row.get("板材号")) == board_id
-        and (not content_fingerprint or _text(row.get("内容指纹")) == content_fingerprint)
-        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
-    ]
     if not board_records:
-        return {"ok": False, "reason": "板材号在去重集合中但没有可验证的正式入账记录"}
-
-    latest = board_records[-1]
+        return {"ok": False, "comparable": False, "historical_proof": historical_proof, "reason": "板材号在去重集合中但没有可验证的正式入账记录"}
     try:
         ledger_qty = int(round(float(latest.get("计入件数") or 0)))
     except (TypeError, ValueError):
-        return {"ok": False, "reason": "永久板材入账记录的计入件数无效"}
+        return {"ok": False, "comparable": False, "historical_proof": historical_proof, "reason": "永久板材入账记录的计入件数无效"}
     expected_qty = int(expected["board_record"]["计入件数"])
     if ledger_qty != expected_qty:
         return {
             "ok": False,
+            "comparable": True,
+            "historical_proof": historical_proof,
             "reason": f"已入账板材计入件数与根目录文件不一致：台账={ledger_qty}，文件={expected_qty}",
         }
 
     return {
         "ok": True,
+        "comparable": True,
+        "historical_proof": historical_proof,
         "reason": "永久台账与根目录完成文件一致，判定为已入账但未完成归档的重试场景",
         "expected_qty": expected_qty,
     }
