@@ -387,13 +387,30 @@ def run():
         logger.info("正式文件回读验证通过")
 
         # 6) 新入账板材 + 已入账但上次归档中断的板材，在回读成功后统一移动。
-        for item in accepted_files + reconciled_files:
+        # 结构化结果供前端逐张展示；板材号永远取待移动完成文件名中的完整编号。
+        for item in accepted_files:
             drive.move_file(item["id"], drive.archive_folder_id)
             logger.info(f"已归档拆图结果: {item['name']} -> 拆图结果/已录入数量")
+            logger.info(
+                f"板材处理结果｜文件={item['name']}｜板材={item['board_id']}｜"
+                "状态=已累计、已录入｜原因=首次校验通过并已写回累计台账｜处理建议=无"
+            )
+        for item in reconciled_files:
+            drive.move_file(item["id"], drive.archive_folder_id)
+            logger.info(f"已归档拆图结果: {item['name']} -> 拆图结果/已录入数量")
+            logger.info(
+                f"板材处理结果｜文件={item['name']}｜板材={item['board_id']}｜"
+                "状态=已累计、仅补归档｜原因=累计台账已有相同内容记录，本次未重复累计｜处理建议=无"
+            )
 
         if blocked:
             for board_id, reason in blocked:
                 logger.warning(f"阻断板材仍保留根目录 {board_id}: {reason}")
+                logger.warning(
+                    f"板材处理结果｜文件={board_id}_完成｜板材={board_id}｜"
+                    f"状态=未累计、未记录｜原因={reason}｜"
+                    "处理建议=核对该板拆图结果和对应订单原始汇总表后重新执行。"
+                )
 
         logger.info("正式生产任务执行结束")
 
