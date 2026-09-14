@@ -229,19 +229,18 @@ def run():
             content_fingerprint = board_content_fingerprint(payload)
 
             # 完整板材号（含 -1、-2 等小序号）与内容指纹共同判重。
-            # 内容完全相同属于重复来源：报错跳过并保留根目录，不再补归档。
+            # 内容完全相同属于重复来源：不再入账、不再扣减；待正式文件回读
+            # 验证成功后，直接移入“已录入数量”。
             # 同板材号但内容不同则继续作为另一张板校验、入账。
             exact_duplicate = (board_id, content_fingerprint) in posted_board_keys
             legacy_candidate = board_id in legacy_posted_boards
             if exact_duplicate:
                 reason = (
                     f"重复内容：完整板材号={board_id}，内容指纹={content_fingerprint} "
-                    "已在累计加工台账入账；本次不录入、不扣减、不归档。"
+                    "已在累计加工台账入账；本次不录入、不扣减，回读验证后归档。"
                 )
-                blocked.append((board_id, reason))
-                qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
-                _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
-                logger.warning(f"板材 {board_id} 重复内容，已跳过并保留根目录")
+                reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
+                logger.info(f"板材 {board_id} 重复内容已核验，将在回读验证后归档")
                 continue
 
             if legacy_candidate:
@@ -260,12 +259,10 @@ def run():
                         f"重复内容：完整板材号={board_id} 已在累计台账入账"
                         f"（原文件={proof.get('filename') or '未知'}，已入账={proof.get('quantity') or '未知'}件，"
                         f"状态={proof.get('status') or '未知'}）；"
-                        "本次不录入、不扣减、不归档。"
+                        "本次不录入、不扣减，回读验证后归档。"
                     )
-                    blocked.append((board_id, reason))
-                    qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
-                    _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
-                    logger.warning(f"板材 {board_id} 与旧版台账内容一致，已跳过并保留根目录")
+                    reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
+                    logger.info(f"板材 {board_id} 与历史台账内容一致，将在回读验证后归档")
                     continue
                 if recovery.get("comparable") is False:
                     proof = recovery.get("historical_proof", {})
