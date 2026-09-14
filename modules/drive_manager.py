@@ -151,7 +151,7 @@ class DriveManager:
 
     @staticmethod
     def board_id_from_filename(filename: str) -> str:
-        """文件名中 `_完成` 前的完整字符串就是板材号，保留 #、废 等字符。"""
+        """文件名中 `_完成` 前的完整字符串就是板材号，保留 #、废、-1 等小序号。"""
         name = Path(filename).stem
         if "_完成" not in name:
             raise ValueError(f"不是完成文件: {filename}")
