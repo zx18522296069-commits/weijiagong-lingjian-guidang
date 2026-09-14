@@ -135,6 +135,8 @@ class CoreWorkflowTests(unittest.TestCase):
     def test_board_id_keeps_suffix_sequence(self):
         self.assertEqual(DriveManager.board_id_from_filename("2209-1_完成.xlsx"), "2209-1")
         self.assertEqual(DriveManager.board_id_from_filename("#2209-2_完成.xlsm"), "#2209-2")
+        self.assertEqual(DriveManager.board_id_from_filename("#2323_完成 (1).xlsx"), "#2323-1")
+        self.assertEqual(DriveManager.board_id_from_filename("#2323_完成（2）.xlsx"), "#2323-2")
 
     def test_existing_ledger_exposes_permanent_historical_rows(self):
         with tempfile.TemporaryDirectory() as td:
