@@ -255,14 +255,30 @@ def run():
                     content_fingerprint="",
                 )
                 if recovery["ok"]:
+                    proof = recovery.get("historical_proof", {})
                     reason = (
-                        f"重复内容：完整板材号={board_id} 已在旧版累计台账入账；"
+                        f"重复内容：完整板材号={board_id} 已在累计台账入账"
+                        f"（原文件={proof.get('filename') or '未知'}，已入账={proof.get('quantity') or '未知'}件，"
+                        f"状态={proof.get('status') or '未知'}）；"
                         "本次不录入、不扣减、不归档。"
                     )
                     blocked.append((board_id, reason))
                     qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
                     _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
                     logger.warning(f"板材 {board_id} 与旧版台账内容一致，已跳过并保留根目录")
+                    continue
+                if recovery.get("comparable") is False:
+                    proof = recovery.get("historical_proof", {})
+                    reason = (
+                        f"检测到历史入账记录：完整板材号={board_id}，"
+                        f"原文件={proof.get('filename') or '未知'}，已入账={proof.get('quantity') or '未知'}件，"
+                        f"状态={proof.get('status') or '未知'}；"
+                        f"本次无法复核内容，不重复扣减、不归档。原因：{recovery['reason']}"
+                    )
+                    blocked.append((board_id, reason))
+                    qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
+                    _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
+                    logger.warning(f"板材 {board_id} 已有历史入账记录但本次无法复核，已保留根目录")
                     continue
                 logger.info(f"板材 {board_id} 编号重复但内容不同：按新板材继续校验并分别入账")
 
