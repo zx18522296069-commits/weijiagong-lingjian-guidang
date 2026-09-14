@@ -2,8 +2,8 @@ name: 未加工零件自动更新
 
 on:
   schedule:
-    - cron: '25 9 * * *'
-    - cron: '0 14 * * *'
+    - cron: '0 9 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       mode:
