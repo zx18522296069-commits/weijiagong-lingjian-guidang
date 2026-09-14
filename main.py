@@ -197,9 +197,11 @@ def run():
                 f"{row['order']}/{row['drawing']}/剩余{row['remaining']}"
                 for row in missing_incomplete[:5]
             )
-            raise RuntimeError(
-                "发现累计台账中仍未完成/异常的零件已不在“正在加工”原始订单源中，"
-                f"禁止静默删除。受影响订单={affected_orders}；示例={examples}"
+            # 缺少订单源时必须保留历史数据，但不能阻断其他板材的校验、入账和补归档。
+            frozen_source_rows.extend(missing_incomplete)
+            logger.warning(
+                "历史订单源缺失，相关零件已冻结并保留上次结果；继续处理其余板材。"
+                f"受影响订单={affected_orders}；示例={examples}"
             )
         if completed_history:
             logger.info(f"永久累计台账保留已退出的完成历史零件 {len(completed_history)} 条")
