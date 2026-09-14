@@ -228,11 +228,23 @@ def run():
             payload = read_split_result(local, board_id=board_id, source_name=filename)
             content_fingerprint = board_content_fingerprint(payload)
 
-            # 上次可能已经成功写入台账，但在“移动到已录入数量”之前中断。
-            # 这种情况不能再次累计；只有根目录文件与永久台账完全一致时，才允许补归档。
+            # 完整板材号（含 -1、-2 等小序号）与内容指纹共同判重。
+            # 内容完全相同属于重复来源：报错跳过并保留根目录，不再补归档。
+            # 同板材号但内容不同则继续作为另一张板校验、入账。
             exact_duplicate = (board_id, content_fingerprint) in posted_board_keys
             legacy_candidate = board_id in legacy_posted_boards
-            if exact_duplicate or legacy_candidate:
+            if exact_duplicate:
+                reason = (
+                    f"重复内容：完整板材号={board_id}，内容指纹={content_fingerprint} "
+                    "已在累计加工台账入账；本次不录入、不扣减、不归档。"
+                )
+                blocked.append((board_id, reason))
+                qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
+                _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
+                logger.warning(f"板材 {board_id} 重复内容，已跳过并保留根目录")
+                continue
+
+            if legacy_candidate:
                 recovery = reconcile_posted_board(
                     board_id=board_id,
                     filename=filename,
@@ -240,18 +252,17 @@ def run():
                     source_records=source_records,
                     existing_flows=existing["flows"] + new_flows,
                     existing_board_records=existing["board_records"] + new_board_records,
-                    content_fingerprint=content_fingerprint if exact_duplicate else "",
+                    content_fingerprint="",
                 )
                 if recovery["ok"]:
-                    reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
-                    logger.info(f"板材 {board_id} 已入账且内容一致：本轮只补归档，不重复累计")
-                    continue
-                if exact_duplicate:
-                    reason = recovery["reason"]
+                    reason = (
+                        f"重复内容：完整板材号={board_id} 已在旧版累计台账入账；"
+                        "本次不录入、不扣减、不归档。"
+                    )
                     blocked.append((board_id, reason))
                     qty = sum(int(r.get("split_quantity", 0)) for r in payload.get("rows", []))
                     _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
-                    logger.warning(f"板材 {board_id} 已入账但根目录文件无法安全补归档：{reason}")
+                    logger.warning(f"板材 {board_id} 与旧版台账内容一致，已跳过并保留根目录")
                     continue
                 logger.info(f"板材 {board_id} 编号重复但内容不同：按新板材继续校验并分别入账")
 
