@@ -151,13 +151,22 @@ class DriveManager:
 
     @staticmethod
     def board_id_from_filename(filename: str) -> str:
-        """文件名中 `_完成` 前的完整字符串就是板材号，保留 #、废、-1 等小序号。"""
+        """
+        板材号取完成文件的原始板号，并保留小序号。
+
+        例如：#2323_完成.xlsx -> #2323；
+        #2323_完成 (1).xlsx -> #2323-1。
+        文件系统追加的 (1)、（1）统一视为板材小号，不能与原板重复入账。
+        """
         name = Path(filename).stem
         if "_完成" not in name:
             raise ValueError(f"不是完成文件: {filename}")
-        board_id = name.split("_完成", 1)[0]
+        board_id, suffix = name.split("_完成", 1)
         if not board_id:
             raise ValueError(f"无法从文件名提取板材号: {filename}")
+        match = re.fullmatch(r"\s*[（(]\s*(\d+)\s*[)）]\s*", suffix)
+        if match:
+            return f"{board_id}-{match.group(1)}"
         return board_id
 
     def download_file(self, file_id: str, save_path: str) -> str:
