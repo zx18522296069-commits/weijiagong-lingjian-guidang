@@ -213,6 +213,27 @@ class CoreWorkflowTests(unittest.TestCase):
             self.assertTrue(recovery["ok"], recovery.get("reason"))
             self.assertEqual(recovery["expected_qty"], 2)
 
+    def test_legacy_posted_board_without_current_source_returns_historical_proof(self):
+        with tempfile.TemporaryDirectory() as td:
+            source_path = Path(td) / "source.xlsx"
+            split_path = Path(td) / "#309_完成.xlsx"
+            ledger_path = Path(td) / "ledger.xlsx"
+            self._make_source(source_path)
+            self._make_split(split_path, order="MISSING-ORDER", drawing="MISSING-DRAWING")
+            self._make_ledger(ledger_path, completed=True, board_id="#309")
+            recovery = reconcile_posted_board(
+                board_id="#309",
+                filename="#309_完成.xlsx",
+                split_payload=read_split_result(split_path, board_id="#309"),
+                source_records=read_source_summary(source_path),
+                existing_flows=read_existing_ledger(ledger_path)["flows"],
+                existing_board_records=read_existing_ledger(ledger_path)["board_records"],
+            )
+            self.assertFalse(recovery["ok"])
+            self.assertFalse(recovery["comparable"])
+            self.assertEqual(recovery["historical_proof"]["filename"], "#309_完成.xlsx")
+            self.assertEqual(recovery["historical_proof"]["quantity"], "2")
+
     def test_state_and_reports(self):
         with tempfile.TemporaryDirectory() as td:
             source_path = Path(td) / "source.xlsx"
