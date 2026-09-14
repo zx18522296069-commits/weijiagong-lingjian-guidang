@@ -223,6 +223,7 @@ def run():
         posted_board_keys = set(existing.get("posted_board_keys", set()))
         legacy_posted_boards = set(existing.get("legacy_posted_boards", set()))
 
+        logger.info("已启用补归档规则：已入账且内容核验一致的根目录板材只归档，不重复累计或扣减")
         for idx, item in enumerate(sorted(pending_files, key=lambda x: x.get("name", "")), start=1):
             filename = item["name"]
             board_id = drive.board_id_from_filename(filename)
