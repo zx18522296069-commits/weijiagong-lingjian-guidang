@@ -57,16 +57,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore production runtime cache
+      # source cache 单独保持 .cache 路径，兼容此前已经生成的 weijiagong-v2 缓存版本。
+      - name: Restore source cache
         uses: actions/cache/restore@v4
         with:
-          path: |
-            runtime_state
-            .cache
-          key: weijiagong-runtime-production-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
           restore-keys: |
-            weijiagong-runtime-production-
+            weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-
             weijiagong-v2-
+
+      # runtime state 独立缓存，避免因为新增路径改变 .cache 的 Actions cache version。
+      - name: Restore runtime state
+        uses: actions/cache/restore@v4
+        with:
+          path: runtime_state
+          key: weijiagong-runtime-v1-${{ github.run_id }}
+          restore-keys: |
+            weijiagong-runtime-v1-
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -77,22 +85,27 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Syntax check
-        run: python -m compileall -q main.py safe_main.py self_healing_main.py modules tests
+        run: python -m compileall -q main.py safe_main.py production_main.py self_healing_main.py modules tests
 
       - name: Regression tests
         run: python -m unittest discover -s tests -v
 
       - name: Run update
-        run: python safe_main.py
+        run: python production_main.py
 
-      - name: Save production runtime cache
+      - name: Save source cache
         if: ${{ success() && inputs.mode == 'production' }}
         uses: actions/cache/save@v4
         with:
-          path: |
-            runtime_state
-            .cache
-          key: weijiagong-runtime-production-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
+
+      - name: Save runtime state
+        if: ${{ success() && inputs.mode == 'production' }}
+        uses: actions/cache/save@v4
+        with:
+          path: runtime_state
+          key: weijiagong-runtime-v1-${{ github.run_id }}
 
       - name: Save execution log
         if: always()
