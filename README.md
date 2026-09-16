@@ -50,16 +50,30 @@ Drive 文件体也使用持久化缓存：相同 file id + `modifiedTime` + size
 
 缓存只是加速层，不是事实源。缓存丢失或失效时系统会自动回到真实 Google Drive 文件重新读取；业务规则和核对标准不因缓存改变。
 
-## 执行方式
+## 定时与触发方式
 
-本仓库不再保存固定执行时间，也不维护独立定时规则。
+本项目不自行设置固定 GitHub Actions cron 定时。正式自动执行时间由生产控制台前端定时配置统一管理；本仓库仅负责接收触发并执行未加工零件更新流程。
 
 统一规则：
 
-- 手动执行：由生产自动化控制台前端“未加工更新”按钮触发；控制台按正式生产模式调用。
-- 定时执行：仅由生产自动化控制台前端“定时设置”管理。控制台负责向本仓库工作流写入或移除 `schedule`。
-- GitHub 仓库内直接手动运行仍保留 `workflow_dispatch`，默认 `test`，需要时可显式选择 `production`。
-- 禁止同时在 README、脚本或其他工作流中维护第二套固定 cron，以免重复执行。
+- 前端“未加工更新”立即执行：生产控制台通过 GitHub API `workflow_dispatch` 以 `production` 模式触发本仓库。
+- 前端定时执行：生产控制台后台调度器读取前端保存的北京时间计划，到点后通过 GitHub API `workflow_dispatch` 触发本仓库。
+- 本仓库 `.github/workflows/update_parts.yml` 不包含 `schedule`，不保存任何业务固定 cron。
+- `workflow_dispatch` 同时保留给人工测试、dry-run、生产补跑和故障恢复使用；GitHub 页面人工执行默认 `test`，需要时可显式选择 `production`。
+- 修改自动执行时间时，只修改生产控制台前端定时配置，不再修改本仓库 workflow。
+- 禁止在 README、Python 脚本、其他 workflow 或其他后台服务中再维护第二套“未加工更新”业务时间。
+
+## 并发规则
+
+当前仍保持：
+
+```yaml
+concurrency:
+  group: weijiagong-lingjian-guidang
+  cancel-in-progress: false
+```
+
+本次不改变并发取消策略。先依赖现有增量处理、幂等、可恢复写入、缓存和上传回读校验保证安全；以后如需调整 `cancel-in-progress`，单独评估。
 
 ## 当前状态
 
