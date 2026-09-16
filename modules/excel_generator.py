@@ -31,10 +31,11 @@ THIN = Side(style="thin", color="D9D9D9")
 def _status_fill(status: str):
     if status == "已完成":
         return PatternFill("solid", fgColor=GREEN)
-    if status in {"未加工", "部分完成"}:
+    if status == "部分完成":
         return PatternFill("solid", fgColor=YELLOW)
     if status == "超加工/待核查":
         return PatternFill("solid", fgColor=RED)
+    # “未加工”表示这一零件尚未发生任何加工，保持默认无底色。
     return None
 
 
