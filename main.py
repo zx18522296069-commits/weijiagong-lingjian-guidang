@@ -10,8 +10,9 @@
 7. 本地校验后按顺序上传；每份上传只用 Drive metadata/MD5/size 确认，不重新下载整个 Excel
 8. 两份正式文件都确认成功后，才把新入账和补归档文件统一移入“已录入数量”
 
-注意：整单完成只控制“当前待加工零件”动态视图是否移除订单，
-不控制拆图结果文件归档；每张板成功入账并完成事务确认后即可归档。
+注意：整单完成同时控制《当前待加工零件》的退出，以及《累计加工台账.xlsx》中
+“累计加工台账”主页面向“已完成订单”页的迁移；加工流水、板材入账记录、异常记录永久保留。
+整单完成不控制拆图结果文件归档；每张板成功入账并完成事务确认后即可归档。
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ def _blocked_anomaly(board_id: str, reason: str, quantity: int = 0) -> dict:
 
 def _verify_output_workbooks(cumulative_path: Path, pending_path: Path):
     cumulative = load_workbook(cumulative_path, read_only=True, data_only=True)
-    expected = {"累计加工台账", "加工流水", "板材入账记录", "异常记录"}
+    expected = {"累计加工台账", "加工流水", "板材入账记录", "异常记录", "已完成订单"}
     if not expected.issubset(set(cumulative.sheetnames)):
         raise RuntimeError(f"累计台账生成后缺少工作表: {expected - set(cumulative.sheetnames)}")
     pending = load_workbook(pending_path, read_only=True, data_only=True)
