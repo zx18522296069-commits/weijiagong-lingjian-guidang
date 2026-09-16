@@ -58,6 +58,7 @@ class FormalFilesTest(unittest.TestCase):
 
     def test_empty_ledger_has_all_permanent_sections(self):
         ledger = empty_ledger()
+        self.assertEqual(ledger["report_schema_version"], 2)
         self.assertEqual(ledger["state"], {})
         self.assertEqual(ledger["historical_rows"], [])
         self.assertEqual(ledger["flows"], [])
