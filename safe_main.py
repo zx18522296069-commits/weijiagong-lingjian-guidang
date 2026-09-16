@@ -84,12 +84,27 @@ def business_outputs_changed(existing: dict, candidate: dict) -> bool:
     return business_ledger_signature(existing) != business_ledger_signature(candidate)
 
 
+def _log_order_source_coverage(drive) -> None:
+    """明确区分订单目录总数与真正找到的原始汇总表数，缺失项不得静默消失。"""
+    containers = drive.list_order_containers()
+    sources = drive.list_order_source_files()
+    source_folder_ids = {str(item.get("order_folder_id", "")) for item in sources}
+    missing = [item for item in containers if str(item.get("id", "")) not in source_folder_ids]
+
+    logger.info(f"正在加工订单目录 {len(containers)} 个")
+    logger.info(f"其中识别到订单原始汇总表 {len(sources)} 个")
+    for item in missing:
+        logger.warning(f"订单目录未找到正式汇总表，未纳入零件事实源：{item.get('name', '')}")
+
+
 def run() -> None:
     from modules.drive_manager import DriveManager
 
     drive = DriveManager()
     if not drive.check_config():
         raise RuntimeError("Google Drive 配置不完整")
+
+    _log_order_source_coverage(drive)
 
     official = prepare_official_files(drive)
     missing = [name for name, item in official.items() if item is None]
@@ -102,7 +117,6 @@ def run() -> None:
     os.environ["CUMULATIVE_FILE_ID"] = str(official[CUMULATIVE_NAME]["id"])
     os.environ["PENDING_FILE_ID"] = str(official[PENDING_NAME]["id"])
 
-    # main.py 通过 from-import 绑定读取函数，因此导入后显式替换为等价的顺序扫描实现。
     import main as business_main
 
     business_main.read_existing_ledger = read_existing_ledger_fast
