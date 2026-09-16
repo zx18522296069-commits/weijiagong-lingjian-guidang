@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import re
+import shutil
 from pathlib import Path
 
 from googleapiclient.discovery import build
@@ -23,6 +25,8 @@ class DriveManager:
         self.working_folder_id = os.getenv("WORKING_FOLDER_ID", "")
         self.split_folder_id = os.getenv("SPLIT_FOLDER_ID", "")
         self.archive_folder_id = os.getenv("ARCHIVE_FOLDER_ID", "")
+        cache_root = os.getenv("DRIVE_DOWNLOAD_CACHE_DIR", "").strip()
+        self.download_cache_root = Path(cache_root) if cache_root else None
         self.service = None
 
     def check_config(self) -> bool:
@@ -170,16 +174,73 @@ class DriveManager:
             return f"{board_id}-{match.group(1)}"
         return board_id
 
+    def _cache_dir_for_file(self, file_id: str) -> Path | None:
+        if self.download_cache_root is None:
+            return None
+        # Google Drive file id 仅含 URL-safe 字符；仍做一次收敛，避免异常 id 形成路径穿越。
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", file_id)
+        return self.download_cache_root / safe_id
+
+    def _cache_path_for_metadata(self, file_id: str, metadata: dict) -> Path | None:
+        cache_dir = self._cache_dir_for_file(file_id)
+        if cache_dir is None:
+            return None
+        signature = "|".join(
+            [
+                file_id,
+                str(metadata.get("modifiedTime", "")),
+                str(metadata.get("size", "")),
+            ]
+        )
+        digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+        return cache_dir / f"{digest}.bin"
+
+    def _invalidate_download_cache(self, file_id: str) -> None:
+        cache_dir = self._cache_dir_for_file(file_id)
+        if cache_dir and cache_dir.exists():
+            shutil.rmtree(cache_dir, ignore_errors=True)
+
     def download_file(self, file_id: str, save_path: str) -> str:
+        """
+        下载 Drive 文件。
+
+        若配置 DRIVE_DOWNLOAD_CACHE_DIR，则先只读取文件元数据（file id + modifiedTime + size）。
+        三者与缓存一致时直接复用本地缓存，不再重新下载；文件发生修改后才重新拉取。
+        正式文件被本程序写回时会主动清掉对应缓存，因此回读验证一定重新从 Drive 下载，
+        不会拿上传前缓存冒充远端验证结果。
+        """
         service = self._service()
+        target = Path(save_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        metadata = None
+        cache_path = None
+        if self.download_cache_root is not None:
+            metadata = self.get_file(file_id, fields="id,modifiedTime,size")
+            cache_path = self._cache_path_for_metadata(file_id, metadata)
+            if cache_path and cache_path.exists():
+                expected_size = metadata.get("size")
+                if expected_size in (None, "") or cache_path.stat().st_size == int(expected_size):
+                    shutil.copy2(cache_path, target)
+                    return str(target)
+                cache_path.unlink(missing_ok=True)
+
         request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        with io.FileIO(save_path, "wb") as fh:
+        with io.FileIO(target, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-        return save_path
+
+        if cache_path is not None:
+            cache_dir = cache_path.parent
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # 同一个 Drive 文件只保留当前版本，防止长期运行持续膨胀缓存。
+            for old in cache_dir.glob("*.bin"):
+                if old != cache_path:
+                    old.unlink(missing_ok=True)
+            shutil.copy2(target, cache_path)
+        return str(target)
 
     def upload_file(self, file_path: str, target_folder_id: str) -> dict:
         metadata = {"name": os.path.basename(file_path), "parents": [target_folder_id]}
@@ -193,6 +254,8 @@ class DriveManager:
 
     def update_file_content(self, file_id: str, file_path: str) -> dict:
         """覆盖既有 Drive 文件内容，保留原文件 ID/位置。"""
+        # 必须先清掉旧缓存：正式写回后的回读验证必须真的读取远端新内容。
+        self._invalidate_download_cache(file_id)
         media = MediaFileUpload(file_path, resumable=False)
         return self._service().files().update(
             fileId=file_id,
