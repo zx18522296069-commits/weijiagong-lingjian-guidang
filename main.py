@@ -1,20 +1,22 @@
 """未加工零件云端自动处理主入口。
 
 正式流程：
-1. 扫描“正在加工”订单源（支持文件夹快捷方式），按文件 ID + 修改时间增量读取
-2. 在“正在加工”根目录按文件名发现两份正式表；缺失时自动按当前订单重建
+1. 扫描“正在加工”订单源，按 metadata 签名增量读取
+2. 在“正在加工”根目录按文件名发现两份正式表；缺失时安全自愈
 3. 读取永久累计台账（若缺失则以当前全部订单、累计已加工=0作为新基线）
-4. 只扫描“拆图结果”根目录直接的 *_完成.xlsx
-5. 按“完整板材号 + 文件业务内容”去重并逐板核验
-6. 更新累计台账与当前待加工零件
-7. 回读验证成功后，才把已成功入账的拆图结果移入“已录入数量”
+4. 只扫描“拆图结果”根目录直接的 *_完成.xlsx/xlsm/xls
+5. 按“完整板材号 + 文件业务内容”去重并逐板整板核验
+6. 批量更新累计事实并完整重建两份正式 Excel
+7. 本地校验后按顺序上传；每份上传只用 Drive metadata/MD5/size 确认，不重新下载整个 Excel
+8. 两份正式文件都确认成功后，才把新入账和补归档文件统一移入“已录入数量”
 
 注意：整单完成只控制“当前待加工零件”动态视图是否移除订单，
-不控制拆图结果文件归档；每张板成功入账后即可归档。
+不控制拆图结果文件归档；每张板成功入账并完成事务确认后即可归档。
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from collections import defaultdict
@@ -102,6 +104,32 @@ def _verify_output_workbooks(cumulative_path: Path, pending_path: Path):
     pending = load_workbook(pending_path, read_only=True, data_only=True)
     if "当前待加工零件" not in pending.sheetnames:
         raise RuntimeError("当前待加工零件文件缺少正式工作表")
+
+
+def _file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_drive_upload(drive: DriveManager, file_id: str, local_path: Path) -> dict:
+    metadata = drive.get_file(file_id, fields="id,name,modifiedTime,md5Checksum,size")
+    local_md5 = _file_md5(local_path)
+    remote_md5 = str(metadata.get("md5Checksum") or "").lower()
+    if not remote_md5:
+        raise RuntimeError(f"Drive 上传验证失败：{local_path.name} 未返回 md5Checksum")
+    if remote_md5 != local_md5:
+        raise RuntimeError(
+            f"Drive 上传验证失败：{local_path.name} MD5 不一致，本地={local_md5}，远端={remote_md5}"
+        )
+    remote_size = metadata.get("size")
+    if remote_size not in (None, "") and int(remote_size) != local_path.stat().st_size:
+        raise RuntimeError(
+            f"Drive 上传验证失败：{local_path.name} size 不一致，本地={local_path.stat().st_size}，远端={remote_size}"
+        )
+    return metadata
 
 
 def _split_historical_rows(existing: dict, source_index: dict) -> tuple[list[dict], list[dict]]:
@@ -297,7 +325,7 @@ def run():
             legacy_candidate = board_id in legacy_posted_boards
             if exact_duplicate:
                 reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
-                logger.info(f"板材 {board_id} 重复内容已核验，将在回读验证后归档")
+                logger.info(f"板材 {board_id} 重复内容已核验，将在两份正式表确认成功后补归档")
                 continue
 
             if legacy_candidate:
@@ -312,7 +340,7 @@ def run():
                 )
                 if recovery["ok"]:
                     reconciled_files.append({**item, "board_id": board_id, "content_fingerprint": content_fingerprint})
-                    logger.info(f"板材 {board_id} 与历史台账内容一致，将在回读验证后归档")
+                    logger.info(f"板材 {board_id} 与历史台账内容一致，将在两份正式表确认成功后补归档")
                     continue
                 if recovery.get("comparable") is False:
                     proof = recovery.get("historical_proof", {})
@@ -327,7 +355,7 @@ def run():
                     _append_unique_anomaly(new_anomalies, anomaly_seen, _blocked_anomaly(board_id, reason, qty))
                     logger.warning(f"板材 {board_id} 已有历史入账记录但本次无法复核，已保留根目录")
                     continue
-                logger.info(f"板材 {board_id} 编号重复但内容不同：按新板材继续校验并分别入账")
+                logger.info(f"板材 {board_id} 编号重复且内容不同：进入同板材号内容冲突校验，禁止自动再次入账")
 
             result = validate_new_board(
                 board_id=board_id,
@@ -381,7 +409,7 @@ def run():
             f"永久保留已退出完成历史{len(completed_history)}条。"
             + (f"自愈：{'、'.join(rebuild_note)}。" if rebuild_note else "")
             + "所有尺寸、订单数量、基础总重量均以正在加工目录原始汇总表为事实源；"
-            "拆图结果成功写入并回读验证后才归档。"
+            "拆图结果只有在两份正式表本地校验且上传文件通过Drive metadata/MD5/size确认后才归档。"
         )
 
         all_flows = existing["flows"] + new_flows
@@ -415,23 +443,29 @@ def run():
                     logger.warning(f"测试发现阻断板材 {board_id}: {reason}")
             return
 
-        # 6) 有正式文件则覆盖；缺失则在“正在加工”根目录创建。以后始终按文件名重新发现真实 ID。
+        # 6) 可恢复事务：累计表先写并校验成功，再写当前待加工表。
         cumulative_written = write_formal_file(drive, cumulative_meta, cumulative_out)
-        pending_written = write_formal_file(drive, pending_meta, pending_out)
         cumulative_file_id = cumulative_written["id"]
-        pending_file_id = pending_written["id"]
-        logger.info(
-            f"正式文件写回：{CUMULATIVE_NAME}={'新建' if cumulative_missing else '更新'}；"
-            f"{PENDING_NAME}={'新建' if pending_missing else '更新'}"
-        )
+        if not cumulative_written.get("_skipped"):
+            _verify_drive_upload(drive, cumulative_file_id, cumulative_out)
+            logger.info(f"上传校验通过｜{CUMULATIVE_NAME}｜Drive metadata/MD5/size 一致")
 
-        # 7) 回读验证必须按刚刚写入/新建后的真实 ID 从 Drive 重新下载。
-        verify_cumulative = temp_dir / "verify_累计加工台账.xlsx"
-        verify_pending = temp_dir / "verify_当前待加工零件.xlsx"
-        drive.download_file(cumulative_file_id, str(verify_cumulative))
-        drive.download_file(pending_file_id, str(verify_pending))
-        _verify_output_workbooks(verify_cumulative, verify_pending)
-        verified_ledger = read_existing_ledger(verify_cumulative)
+        pending_written = write_formal_file(drive, pending_meta, pending_out)
+        pending_file_id = pending_written["id"]
+        if not pending_written.get("_skipped"):
+            _verify_drive_upload(drive, pending_file_id, pending_out)
+            logger.info(f"上传校验通过｜{PENDING_NAME}｜Drive metadata/MD5/size 一致")
+
+        if cumulative_written.get("_skipped") and pending_written.get("_skipped"):
+            logger.info("正式文件写回：业务事实无变化，两份正式 Excel 均未上传")
+        else:
+            logger.info(
+                f"正式文件写回：{CUMULATIVE_NAME}={'跳过' if cumulative_written.get('_skipped') else ('新建' if cumulative_missing else '更新')}；"
+                f"{PENDING_NAME}={'跳过' if pending_written.get('_skipped') else ('新建' if pending_missing else '更新')}"
+            )
+
+        # 7) 远端字节已由 MD5/size 确认与本地一致；语义校验直接使用本地已确认文件，禁止再次下载整个 Excel。
+        verified_ledger = read_existing_ledger(cumulative_out)
         missing_boards = [
             item["board_id"]
             for item in accepted_files
@@ -439,9 +473,9 @@ def run():
         ]
         if missing_boards:
             raise RuntimeError(f"写回后板材入账记录验证失败: {missing_boards}")
-        logger.info("正式文件回读验证通过")
+        logger.info("正式文件验证通过：本地语义校验完成；远端上传使用 Drive metadata/MD5/size 确认，未重新下载整个 Excel")
 
-        # 8) 新入账板材 + 已入账但上次归档中断的板材，在回读成功后统一移动。
+        # 8) 两份正式文件都成功后，统一归档新入账和已确认重复文件。
         for item in accepted_files:
             drive.move_file(item["id"], drive.archive_folder_id)
             logger.info(f"已归档拆图结果: {item['name']} -> 拆图结果/已录入数量")
