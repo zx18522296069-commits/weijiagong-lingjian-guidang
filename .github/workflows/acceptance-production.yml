@@ -1,4 +1,4 @@
-# acceptance-pass: cleanup-8
+# acceptance-pass: final-9
 name: 临时未加工生产验收
 
 on:
@@ -60,7 +60,7 @@ jobs:
         run: python -m compileall -q main.py safe_main.py production_main.py self_healing_main.py modules tests
       - name: Regression tests
         run: python -m unittest discover -s tests -v
-      - name: Run cleanup production acceptance
+      - name: Run final no-change production acceptance
         run: python production_main.py
       - name: Save source cache
         if: ${{ success() }}
