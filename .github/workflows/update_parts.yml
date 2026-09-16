@@ -73,13 +73,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Syntax check
-        run: python -m compileall -q main.py self_healing_main.py modules tests
+        run: python -m compileall -q main.py safe_main.py self_healing_main.py modules tests
 
       - name: Regression tests
         run: python -m unittest discover -s tests -v
 
       - name: Run update
-        run: python self_healing_main.py
+        run: python safe_main.py
 
       - name: Save incremental cache
         if: always()
