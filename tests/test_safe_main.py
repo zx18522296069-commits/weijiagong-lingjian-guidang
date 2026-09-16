@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
-from safe_main import business_outputs_changed, business_ledger_signature
+from safe_main import business_outputs_changed, business_ledger_signature, legacy_block_compat_message
 
 
 class SafeWriteGuardTests(unittest.TestCase):
@@ -129,6 +129,23 @@ class SafeWriteGuardTests(unittest.TestCase):
         candidate = deepcopy(existing)
         candidate["board_records"].append({"板材号": "#101", "状态": "已核验并入账"})
         self.assertTrue(business_outputs_changed(existing, candidate))
+
+    def test_structured_block_adds_legacy_log_only_when_missing(self):
+        seen: set[str] = set()
+        self.assertIsNone(legacy_block_compat_message("板材 #2203 阻断：无匹配", seen))
+        self.assertIn("#2203", seen)
+
+        message = (
+            "板材处理结果｜文件=#2326_完成｜板材=#2326｜状态=未累计、未记录｜"
+            "原因=检测到历史入账记录；本次无法复核内容，不重复扣减、不归档。｜"
+            "处理建议=核对后重新执行。"
+        )
+        compat = legacy_block_compat_message(message, seen)
+        self.assertEqual(
+            compat,
+            "板材 #2326 阻断：检测到历史入账记录；本次无法复核内容，不重复扣减、不归档。",
+        )
+        self.assertIsNone(legacy_block_compat_message(message, seen))
 
 
 if __name__ == "__main__":
