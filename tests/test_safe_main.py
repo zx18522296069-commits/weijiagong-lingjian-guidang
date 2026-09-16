@@ -80,7 +80,7 @@ class SafeWriteGuardTests(unittest.TestCase):
         )
         self.assertFalse(business_outputs_changed(existing, candidate))
 
-    def test_status_wording_only_does_not_count_as_business_change(self):
+    def test_status_wording_normalization_requires_one_time_write(self):
         existing = self._ledger()
         existing["historical_rows"].append(
             {
@@ -96,15 +96,16 @@ class SafeWriteGuardTests(unittest.TestCase):
                 "processed": 0,
                 "remaining": 2,
                 "pending_weight_t": 0.1,
-                "status": "未加工",
+                "status": "未开始",
             }
         )
         candidate = deepcopy(existing)
-        candidate["historical_rows"][-1]["status"] = "未开始"
-        self.assertEqual(
+        candidate["historical_rows"][-1]["status"] = "未加工"
+        self.assertNotEqual(
             business_ledger_signature(existing),
             business_ledger_signature(candidate),
         )
+        self.assertTrue(business_outputs_changed(existing, candidate))
 
     def test_processed_quantity_change_requires_write(self):
         existing = self._ledger()
