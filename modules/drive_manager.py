@@ -1,4 +1,5 @@
 """Google Drive 连接与正式目录扫描模块。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -10,10 +11,12 @@ from pathlib import Path
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+
 from modules.google_auth import build_credentials, check_auth_config
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class DriveManager:
@@ -25,35 +28,60 @@ class DriveManager:
         cache_root = os.getenv("DRIVE_DOWNLOAD_CACHE_DIR", "").strip()
         self.download_cache_root = Path(cache_root) if cache_root else None
         self.service = None
-        self.stats = {"downloads": 0, "uploads": 0, "metadata_reads": 0}
 
     def check_config(self) -> bool:
-        return bool(check_auth_config() and self.root_folder_id and self.working_folder_id and self.split_folder_id and self.archive_folder_id)
+        return bool(
+            check_auth_config()
+            and self.root_folder_id
+            and self.working_folder_id
+            and self.split_folder_id
+            and self.archive_folder_id
+        )
 
     def connect(self):
-        self.service = build("drive", "v3", credentials=build_credentials(), cache_discovery=False)
+        credentials = build_credentials()
+        self.service = build("drive", "v3", credentials=credentials, cache_discovery=False)
         return self.service
 
-    def _service(self): return self.service or self.connect()
+    def _service(self):
+        return self.service or self.connect()
 
     def list_children(self, folder_id: str) -> list[dict]:
+        """只列指定目录的直接子项，不递归。"""
+        service = self._service()
         query = f"'{folder_id}' in parents and trashed=false"
-        fields = "nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,md5Checksum,shortcutDetails(targetId,targetMimeType))"
-        items, page_token = [], None
+        fields = (
+            "nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,"
+            "shortcutDetails(targetId,targetMimeType))"
+        )
+        items: list[dict] = []
+        page_token = None
         while True:
-            result = self._service().files().list(q=query, fields=fields, pageToken=page_token, pageSize=1000,
-                supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-            items.extend(result.get("files", [])); page_token = result.get("nextPageToken")
-            if not page_token: break
-        self.stats["metadata_reads"] += 1
+            result = service.files().list(
+                q=query,
+                fields=fields,
+                pageToken=page_token,
+                pageSize=1000,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+            items.extend(result.get("files", []))
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
         return items
 
-    def get_file(self, file_id: str, fields: str = "id,name,mimeType,parents,modifiedTime,size,md5Checksum") -> dict:
-        self.stats["metadata_reads"] += 1
-        return self._service().files().get(fileId=file_id, fields=fields, supportsAllDrives=True).execute()
+    def get_file(self, file_id: str, fields: str = "id,name,mimeType,parents,modifiedTime,size") -> dict:
+        return self._service().files().get(
+            fileId=file_id,
+            fields=fields,
+            supportsAllDrives=True,
+        ).execute()
 
     def resolve_folder_item(self, item: dict) -> tuple[str, str] | None:
-        if item.get("mimeType") == FOLDER_MIME: return item["id"], item.get("name", "")
+        """把普通文件夹或指向文件夹的快捷方式解析成 (folder_id, display_name)。"""
+        if item.get("mimeType") == FOLDER_MIME:
+            return item["id"], item.get("name", "")
         if item.get("mimeType") == SHORTCUT_MIME:
             details = item.get("shortcutDetails") or {}
             if details.get("targetMimeType") == FOLDER_MIME and details.get("targetId"):
@@ -61,98 +89,193 @@ class DriveManager:
         return None
 
     def list_order_source_files(self) -> list[dict]:
-        result = []
+        """
+        扫描“正在加工”直接子项；支持订单文件夹和文件夹快捷方式。
+
+        正式订单源允许两种已验证命名：
+        1. 文件名包含“汇总表”；
+        2. 若不存在“汇总表”命名文件，则使用文件名包含“模板”的 Excel，
+           其工作簿内部必须仍由读取层验证存在正式“汇总表”结构。
+
+        同一订单同一优先级若出现多个候选文件则阻断，禁止猜测使用哪一个。
+        不把正式台账/当前待加工表当成订单源。
+        """
+        result: list[dict] = []
         for item in self.list_children(self.working_folder_id):
             resolved = self.resolve_folder_item(item)
-            if not resolved: continue
-            folder_id, container_name = resolved; excel_children = []
+            if not resolved:
+                continue
+            folder_id, container_name = resolved
+            excel_children = []
             for child in self.list_children(folder_id):
-                name = str(child.get("name", "")); lower = name.lower()
-                if child.get("mimeType") == FOLDER_MIME or not lower.endswith((".xlsx", ".xlsm", ".xls")): continue
+                name = str(child.get("name", ""))
+                lower = name.lower()
+                if child.get("mimeType") == FOLDER_MIME:
+                    continue
+                if not lower.endswith((".xlsx", ".xlsm", ".xls")):
+                    continue
                 excel_children.append(child)
-            preferred = [x for x in excel_children if "汇总表" in str(x.get("name", ""))]
-            fallback = [x for x in excel_children if "模板" in str(x.get("name", ""))]
+
+            preferred = [child for child in excel_children if "汇总表" in str(child.get("name", ""))]
+            fallback = [child for child in excel_children if "模板" in str(child.get("name", ""))]
             candidates = preferred if preferred else fallback
-            if len(candidates) > 1: raise RuntimeError(f"订单目录存在多个原始汇总表候选，禁止自动猜测: {container_name} -> {[x.get('name') for x in candidates]}")
-            if not candidates: continue
+
+            if len(candidates) > 1:
+                names = [str(child.get("name", "")) for child in candidates]
+                raise RuntimeError(
+                    f"订单目录存在多个原始汇总表候选，禁止自动猜测: {container_name} -> {names}"
+                )
+            if not candidates:
+                continue
+
             child = candidates[0]
-            result.append({**child, "order_container_name": container_name, "order_folder_id": folder_id, "parent_folder_id": folder_id})
+            result.append({
+                **child,
+                "order_container_name": container_name,
+                "order_folder_id": folder_id,
+            })
         return result
 
     def list_pending_split_files(self) -> list[dict]:
-        result = []
+        """
+        只扫描“拆图结果”根目录直接子文件；不递归进入“已录入数量”。
+        仅返回 *_完成.xlsx / *_完成.xlsm 等待入账文件。
+        """
+        result: list[dict] = []
         for item in self.list_children(self.split_folder_id):
-            name = str(item.get("name", "")); lower = name.lower()
-            if item.get("mimeType") == FOLDER_MIME or "_完成" not in name: continue
-            if lower.endswith((".xlsx", ".xlsm", ".xls")): result.append(item)
+            name = str(item.get("name", ""))
+            lower = name.lower()
+            if item.get("mimeType") == FOLDER_MIME:
+                continue
+            if "_完成" not in name:
+                continue
+            if not lower.endswith((".xlsx", ".xlsm", ".xls")):
+                continue
+            result.append(item)
         return result
 
     @staticmethod
     def board_id_from_filename(filename: str) -> str:
-        name = Path(filename).stem
-        if "_完成" not in name: raise ValueError(f"不是完成文件: {filename}")
-        board_id, suffix = name.split("_完成", 1)
-        if not board_id: raise ValueError(f"无法从文件名提取板材号: {filename}")
-        match = re.fullmatch(r"\s*[（(]\s*(\d+)\s*[)）]\s*", suffix)
-        return f"{board_id}-{match.group(1)}" if match else board_id
+        """
+        板材号取完成文件的原始板号，并保留小序号。
 
-    def _cache_path(self, file_id: str, meta: dict) -> Path | None:
-        if self.download_cache_root is None: return None
-        safe = re.sub(r"[^A-Za-z0-9_-]", "_", file_id)
-        signature = "|".join([file_id, str(meta.get("modifiedTime", "")), str(meta.get("md5Checksum", "")), str(meta.get("size", ""))])
-        return self.download_cache_root / safe / (hashlib.sha256(signature.encode()).hexdigest() + ".bin")
+        例如：#2323_完成.xlsx -> #2323；
+        #2323_完成 (1).xlsx -> #2323-1。
+        文件系统追加的 (1)、（1）统一视为板材小号，不能与原板重复入账。
+        """
+        name = Path(filename).stem
+        if "_完成" not in name:
+            raise ValueError(f"不是完成文件: {filename}")
+        board_id, suffix = name.split("_完成", 1)
+        if not board_id:
+            raise ValueError(f"无法从文件名提取板材号: {filename}")
+        match = re.fullmatch(r"\s*[（(]\s*(\d+)\s*[)）]\s*", suffix)
+        if match:
+            return f"{board_id}-{match.group(1)}"
+        return board_id
+
+    def _cache_dir_for_file(self, file_id: str) -> Path | None:
+        if self.download_cache_root is None:
+            return None
+        # Google Drive file id 仅含 URL-safe 字符；仍做一次收敛，避免异常 id 形成路径穿越。
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", file_id)
+        return self.download_cache_root / safe_id
+
+    def _cache_path_for_metadata(self, file_id: str, metadata: dict) -> Path | None:
+        cache_dir = self._cache_dir_for_file(file_id)
+        if cache_dir is None:
+            return None
+        signature = "|".join(
+            [
+                file_id,
+                str(metadata.get("modifiedTime", "")),
+                str(metadata.get("size", "")),
+            ]
+        )
+        digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()
+        return cache_dir / f"{digest}.bin"
 
     def _invalidate_download_cache(self, file_id: str) -> None:
-        if self.download_cache_root is None: return
-        safe = re.sub(r"[^A-Za-z0-9_-]", "_", file_id); shutil.rmtree(self.download_cache_root / safe, ignore_errors=True)
+        cache_dir = self._cache_dir_for_file(file_id)
+        if cache_dir and cache_dir.exists():
+            shutil.rmtree(cache_dir, ignore_errors=True)
 
     def download_file(self, file_id: str, save_path: str) -> str:
-        target = Path(save_path); target.parent.mkdir(parents=True, exist_ok=True)
+        """
+        下载 Drive 文件。
+
+        若配置 DRIVE_DOWNLOAD_CACHE_DIR，则先只读取文件元数据（file id + modifiedTime + size）。
+        三者与缓存一致时直接复用本地缓存，不再重新下载；文件发生修改后才重新拉取。
+        正式文件被本程序写回时会主动清掉对应缓存，因此回读验证一定重新从 Drive 下载，
+        不会拿上传前缓存冒充远端验证结果。
+        """
+        service = self._service()
+        target = Path(save_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        metadata = None
         cache_path = None
         if self.download_cache_root is not None:
-            meta = self.get_file(file_id, fields="id,modifiedTime,size,md5Checksum")
-            cache_path = self._cache_path(file_id, meta)
-            if cache_path and cache_path.exists() and (not meta.get("size") or cache_path.stat().st_size == int(meta["size"])):
-                shutil.copy2(cache_path, target); return str(target)
-        request = self._service().files().get_media(fileId=file_id, supportsAllDrives=True)
+            metadata = self.get_file(file_id, fields="id,modifiedTime,size")
+            cache_path = self._cache_path_for_metadata(file_id, metadata)
+            if cache_path and cache_path.exists():
+                expected_size = metadata.get("size")
+                if expected_size in (None, "") or cache_path.stat().st_size == int(expected_size):
+                    shutil.copy2(cache_path, target)
+                    return str(target)
+                cache_path.unlink(missing_ok=True)
+
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
         with io.FileIO(target, "wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request); done = False
-            while not done: _, done = downloader.next_chunk()
-        self.stats["downloads"] += 1
-        if cache_path:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            for old in cache_path.parent.glob("*.bin"):
-                if old != cache_path: old.unlink(missing_ok=True)
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+
+        if cache_path is not None:
+            cache_dir = cache_path.parent
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # 同一个 Drive 文件只保留当前版本，防止长期运行持续膨胀缓存。
+            for old in cache_dir.glob("*.bin"):
+                if old != cache_path:
+                    old.unlink(missing_ok=True)
             shutil.copy2(target, cache_path)
         return str(target)
 
-    @staticmethod
-    def local_hashes(path: str | Path) -> dict:
-        sha256 = hashlib.sha256(); md5 = hashlib.md5(usedforsecurity=False); size = 0
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                sha256.update(chunk); md5.update(chunk); size += len(chunk)
-        return {"sha256": sha256.hexdigest(), "md5": md5.hexdigest(), "size": size}
-
     def upload_file(self, file_path: str, target_folder_id: str) -> dict:
-        result = self._service().files().create(body={"name": os.path.basename(file_path), "parents": [target_folder_id]},
-            media_body=MediaFileUpload(file_path, resumable=False), fields="id,name,parents,modifiedTime,size,md5Checksum", supportsAllDrives=True).execute()
-        self.stats["uploads"] += 1; return result
+        metadata = {"name": os.path.basename(file_path), "parents": [target_folder_id]}
+        media = MediaFileUpload(file_path, resumable=False)
+        return self._service().files().create(
+            body=metadata,
+            media_body=media,
+            fields="id,name,parents,modifiedTime,size",
+            supportsAllDrives=True,
+        ).execute()
 
     def update_file_content(self, file_id: str, file_path: str) -> dict:
+        """覆盖既有 Drive 文件内容，保留原文件 ID/位置。"""
+        # 必须先清掉旧缓存：正式写回后的回读验证必须真的读取远端新内容。
         self._invalidate_download_cache(file_id)
-        result = self._service().files().update(fileId=file_id, media_body=MediaFileUpload(file_path, resumable=False),
-            fields="id,name,parents,modifiedTime,size,md5Checksum", supportsAllDrives=True).execute()
-        self.stats["uploads"] += 1; return result
-
-    def verify_remote_hash(self, file_id: str, local_path: str | Path) -> dict:
-        local = self.local_hashes(local_path); remote = self.get_file(file_id, fields="id,name,parents,modifiedTime,size,md5Checksum")
-        if not remote.get("md5Checksum"): raise RuntimeError(f"Drive未返回MD5，无法确认上传完整性: {remote.get('name') or file_id}")
-        if str(remote["md5Checksum"]).lower() != local["md5"].lower(): raise RuntimeError(f"Drive MD5校验失败: {remote.get('name') or file_id}")
-        if remote.get("size") not in (None, "") and int(remote["size"]) != local["size"]: raise RuntimeError(f"Drive size校验失败: {remote.get('name') or file_id}")
-        return {**remote, "local_sha256": local["sha256"], "local_md5": local["md5"]}
+        media = MediaFileUpload(file_path, resumable=False)
+        return self._service().files().update(
+            fileId=file_id,
+            media_body=media,
+            fields="id,name,parents,modifiedTime,size",
+            supportsAllDrives=True,
+        ).execute()
 
     def move_file(self, file_id: str, target_folder_id: str) -> dict:
-        info = self._service().files().get(fileId=file_id, fields="parents", supportsAllDrives=True).execute(); previous = ",".join(info.get("parents", []))
-        return self._service().files().update(fileId=file_id, addParents=target_folder_id, removeParents=previous,
-            fields="id,name,parents,modifiedTime", supportsAllDrives=True).execute()
+        service = self._service()
+        file_info = service.files().get(
+            fileId=file_id,
+            fields="parents",
+            supportsAllDrives=True,
+        ).execute()
+        previous = ",".join(file_info.get("parents", []))
+        return service.files().update(
+            fileId=file_id,
+            addParents=target_folder_id,
+            removeParents=previous,
+            fields="id,name,parents,modifiedTime",
+            supportsAllDrives=True,
+        ).execute()
