@@ -34,6 +34,14 @@ class BusinessRulesRegressionTests(unittest.TestCase):
             "base_total_weight_t": 0.3,
         }]}
 
+    def _detail_row(self, output: Path) -> tuple:
+        ws = load_workbook(output)["累计加工台账"]
+        row = next(
+            r for r in range(1, ws.max_row + 1)
+            if ws.cell(r, 1).value == "A1"
+        )
+        return ws, row
+
     def test_same_full_board_id_with_different_content_is_blocked(self):
         result = validate_new_board(
             board_id="#2326",
@@ -56,17 +64,26 @@ class BusinessRulesRegressionTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result.get("error"))
 
-    def test_unprocessed_status_and_yellow_row(self):
+    def test_unprocessed_status_has_no_fill(self):
         state = build_current_state(self._source(), existing_state={})
         self.assertEqual(state[0]["status"], "未加工")
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "status.xlsx"
             generate_cumulative_report(state, [], [], [], output)
-            ws = load_workbook(output)["累计加工台账"]
-            row = next(
-                r for r in range(1, ws.max_row + 1)
-                if ws.cell(r, 1).value == "A1"
-            )
+            ws, row = self._detail_row(output)
+            self.assertTrue(all(ws.cell(row, col).fill.fill_type is None for col in range(1, 13)))
+
+    def test_partially_processed_status_is_yellow(self):
+        key = ("ORDER-1", "A1", 20.0, "")
+        state = build_current_state(
+            self._source(),
+            existing_state={key: {"processed": 1, "board_sources": "#100×1"}},
+        )
+        self.assertEqual(state[0]["status"], "部分完成")
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "status.xlsx"
+            generate_cumulative_report(state, [], [], [], output)
+            ws, row = self._detail_row(output)
             colors = [ws.cell(row, col).fill.fgColor.rgb[-6:] for col in range(1, 13)]
             self.assertEqual(colors, ["FFF2CC"] * 12)
 
