@@ -1,7 +1,7 @@
 """未加工零件云端自动处理主入口。
 
 正式流程：
-1. 只扫描“正在加工”订单源（支持文件夹快捷方式）
+1. 只扫描“正在加工”订单源（支持文件夹快捷方式），按文件 ID + 修改时间增量读取
 2. 读取永久累计台账
 3. 只扫描“拆图结果”根目录直接的 *_完成.xlsx
 4. 按“完整板材号 + 文件业务内容”去重并逐板核验
@@ -38,6 +38,7 @@ from modules.process_parts import (
     build_source_index,
     validate_new_board,
 )
+from modules.source_cache import SourceRecordCache
 
 logger = get_logger()
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -146,14 +147,37 @@ def run():
         existing = read_existing_ledger(current_ledger_path)
         logger.info(f"永久入账板材数 {len(existing['posted_boards'])}")
 
-        # 2) 读取所有当前订单原始汇总表。单个订单资料异常时冻结该订单，
-        # 其余订单继续处理；异常原因写入运行结果，避免一张问题表拖垮整批任务。
+        # 2) 当前订单源使用持久化增量缓存：
+        # 只要 file id + modifiedTime + size + 文件名 + 订单目录均未变化，
+        # 直接复用上次结构化解析结果，不再下载、也不再解析 Excel。
+        source_cache_file = Path(os.getenv("SOURCE_RECORD_CACHE_FILE", ".cache/source_records.json"))
+        source_cache = SourceRecordCache(source_cache_file)
         source_records: list[dict] = []
         source_errors: list[dict] = []
+        cached_sources = 0
+        refreshed_sources = 0
+
         for idx, item in enumerate(source_files, start=1):
+            container_name = item.get("order_container_name", "")
+            cached = source_cache.get(item)
+            if cached:
+                cached_sources += 1
+                if cached["status"] == "error":
+                    error_item = dict(cached["error"])
+                    source_errors.append(error_item)
+                    logger.warning(
+                        f"复用订单源异常缓存 {error_item.get('order') or error_item.get('source')}: "
+                        f"{error_item.get('reason')}"
+                    )
+                    continue
+                records = list(cached["records"])
+                source_records.extend(records)
+                logger.info(f"复用订单源缓存 {container_name or item['name']}：{len(records)} 条零件")
+                continue
+
+            refreshed_sources += 1
             local = temp_dir / f"source_{idx}_{Path(item['name']).name}"
             drive.download_file(item["id"], str(local))
-            container_name = item.get("order_container_name", "")
             try:
                 records = read_source_summary(
                     local,
@@ -162,18 +186,31 @@ def run():
                 )
             except ValueError as error:
                 order = normalize_order_key(container_name)
-                source_errors.append({
+                error_item = {
                     "order": order,
                     "source": container_name or item["name"],
                     "reason": str(error),
-                })
+                }
+                source_errors.append(error_item)
+                source_cache.store_error(item, error_item)
                 logger.warning(
                     f"订单源未完成 {order or container_name or item['name']}: {error}"
                 )
                 continue
             source_records.extend(records)
-            logger.info(f"读取订单源 {container_name or item['name']}：{len(records)} 条零件")
+            source_cache.store_records(item, records)
+            logger.info(f"重新读取订单源 {container_name or item['name']}：{len(records)} 条零件")
 
+        source_cache.retain(source_files)
+        try:
+            source_cache.save()
+        except OSError as error:
+            # 缓存失败只影响速度，不能影响正式业务结果。
+            logger.warning(f"订单源增量缓存保存失败，本次结果仍按真实源文件执行：{error}")
+
+        logger.info(
+            f"订单源增量处理：复用缓存 {cached_sources} 个，重新下载解析 {refreshed_sources} 个"
+        )
         source_index = build_source_index(source_records)
         logger.info(f"当前订单原始零件总条数 {len(source_records)}")
 
@@ -327,8 +364,8 @@ def run():
         logger.info(f"生成后活动订单当前未出重量 {total_pending_weight:.3f} t")
 
         run_note = (
-            f"自动执行：扫描订单源{len(source_files)}个、成功读取{len(source_files) - len(source_errors)}个、"
-            f"未完成{len(source_errors)}个、待处理板材{len(pending_files)}张；"
+            f"自动执行：扫描订单源{len(source_files)}个、缓存复用{cached_sources}个、重新读取{refreshed_sources}个、"
+            f"成功可用{len(source_files) - len(source_errors)}个、未完成{len(source_errors)}个、待处理板材{len(pending_files)}张；"
             f"本次新入账{len(accepted_files)}张、补归档候选{len(reconciled_files)}张、阻断{len(blocked)}张；"
             f"永久保留已退出完成历史{len(completed_history)}条。"
             "所有尺寸、订单数量、基础总重量均以正在加工目录原始汇总表为事实源；"
