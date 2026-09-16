@@ -29,6 +29,7 @@ jobs:
     env:
       PYTHONUNBUFFERED: '1'
       DRIVE_DOWNLOAD_CACHE_DIR: '.cache/drive_files'
+      SOURCE_RECORD_CACHE_FILE: '.cache/source_records.json'
       GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
       GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
@@ -49,13 +50,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore Drive incremental cache
+      - name: Restore incremental cache
         uses: actions/cache/restore@v4
         with:
-          path: .cache/drive_files
-          key: drive-files-v1-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
           restore-keys: |
-            drive-files-v1-
+            weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -74,12 +75,12 @@ jobs:
       - name: Run update
         run: python main.py
 
-      - name: Save Drive incremental cache
+      - name: Save incremental cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .cache/drive_files
-          key: drive-files-v1-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
 
       - name: Save execution log
         if: always()
