@@ -152,21 +152,60 @@ def _write_records_sheet(ws, headers: list[str], records: list[dict]):
     ws.freeze_panes = "A2"
 
 
+def _anomaly_text(value) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _anomaly_thickness(value) -> str:
+    """把 Excel 读回的 30 与运行中的 30.0 视为同一厚度。"""
+    if value in (None, ""):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _anomaly_text(value)
+    if number.is_integer():
+        return str(int(number))
+    return (f"{number:.9f}").rstrip("0").rstrip(".")
+
+
+def _overprocessing_key(item: dict) -> tuple[str, str, str, str]:
+    return (
+        _anomaly_text(item.get("异常类型")),
+        _anomaly_text(item.get("订单号")),
+        _anomaly_text(item.get("图号")),
+        _anomaly_thickness(item.get("厚度(mm)")),
+    )
+
+
 def _append_overprocessing_anomalies(rows: list[dict], anomalies: list[dict]) -> list[dict]:
-    """负数剩余不是入账阻断，但必须永久记录为“超加工/待核查”。"""
-    result = [dict(item) for item in anomalies]
-    existing_keys = {
-        (
-            str(item.get("异常类型", "")), str(item.get("订单号", "")),
-            str(item.get("图号", "")), str(item.get("厚度(mm)", "")),
-        )
-        for item in result
-    }
+    """负数剩余不是入账阻断，但必须永久记录为“超加工/待核查”，同一业务键只保留一条。"""
+    result: list[dict] = []
+    existing_keys: set[tuple[str, str, str, str]] = set()
+
+    # 历史版本曾因 Excel 数字 30 与运行时 30.0 的字符串差异重复追加。
+    # 这里只清理“超加工/待核查”的同业务重复项；其他异常原样保留。
+    for item in anomalies:
+        record = dict(item)
+        if _anomaly_text(record.get("异常类型")) != "超加工/待核查":
+            result.append(record)
+            continue
+        key = _overprocessing_key(record)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        result.append(record)
+
     for row in rows:
         remaining = int(row.get("remaining", 0))
         if remaining >= 0:
             continue
-        key = ("超加工/待核查", str(row.get("order", "")), str(row.get("drawing", "")), str(row.get("thickness", "")))
+        key = (
+            "超加工/待核查",
+            _anomaly_text(row.get("order")),
+            _anomaly_text(row.get("drawing")),
+            _anomaly_thickness(row.get("thickness")),
+        )
         if key in existing_keys:
             continue
         excess = abs(remaining)
