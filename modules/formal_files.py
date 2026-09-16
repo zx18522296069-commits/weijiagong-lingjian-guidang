@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from modules.drive_manager import FOLDER_MIME, SHORTCUT_MIME
+from modules.excel_generator import REPORT_SCHEMA_VERSION
 
 CUMULATIVE_NAME = "累计加工台账.xlsx"
 PENDING_NAME = "当前待加工零件.xlsx"
@@ -32,8 +33,9 @@ def discover_formal_files(drive) -> dict[str, dict | None]:
 
 
 def empty_ledger() -> dict:
-    """累计台账不存在时的空永久台账状态。"""
+    """累计台账不存在时的空永久台账状态；按当前正式报表版本初始化。"""
     return {
+        "report_schema_version": REPORT_SCHEMA_VERSION,
         "state": {},
         "historical_rows": [],
         "flows": [],
