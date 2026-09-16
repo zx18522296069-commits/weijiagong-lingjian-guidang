@@ -4,6 +4,7 @@
 - 阻断板只记录运行日志，不因为新增阻断异常/运行说明而改写正式 Excel；
 - 只有订单事实、累计数量、加工流水或板材入账记录真正变化时，才允许覆盖两份正式表；
 - 补归档场景可在不重写正式表的情况下继续完成归档；
+- 累计台账采用只读顺序扫描，避免 openpyxl read_only 随机访问反复扫 XML；
 - 不改变 main.py 现有的匹配、整板校验、幂等和归档规则。
 """
 
@@ -15,6 +16,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
+from modules.fast_ledger import read_existing_ledger_fast
 from modules.formal_files import CUMULATIVE_NAME, PENDING_NAME
 from modules.logger import get_logger
 from self_healing_main import prepare_official_files
@@ -50,8 +52,6 @@ def _scalar(value):
             return round(number, 9)
         return str(value)
     text = str(value).strip()
-    # “未开始”是旧版文案，“未加工”是新版文案；二者业务含义相同，
-    # 不能仅因为文案变化就触发正式台账重写。
     if text == "未开始":
         return "未加工"
     return text
@@ -71,11 +71,7 @@ def _sorted_records(rows: list[dict], fields: tuple[str, ...] | None = None) -> 
 
 
 def business_ledger_signature(ledger: dict) -> str:
-    """只比较正式业务事实；故意忽略“异常记录”和运行说明。
-
-    阻断文件没有正式入账，因此其异常只属于本次运行诊断，不能成为
-    覆盖《累计加工台账》《当前待加工零件》的理由。
-    """
+    """只比较正式业务事实；故意忽略“异常记录”和运行说明。"""
     payload = {
         "rows": _sorted_records(list(ledger.get("historical_rows", [])), _ROW_FIELDS),
         "flows": _sorted_records(list(ledger.get("flows", []))),
@@ -89,7 +85,6 @@ def business_outputs_changed(existing: dict, candidate: dict) -> bool:
 
 
 def run() -> None:
-    # 先保留现有自愈逻辑：正式表缺失时仍按现有规则安全重建。
     from modules.drive_manager import DriveManager
 
     drive = DriveManager()
@@ -107,9 +102,11 @@ def run() -> None:
     os.environ["CUMULATIVE_FILE_ID"] = str(official[CUMULATIVE_NAME]["id"])
     os.environ["PENDING_FILE_ID"] = str(official[PENDING_NAME]["id"])
 
+    # main.py 通过 from-import 绑定读取函数，因此导入后显式替换为等价的顺序扫描实现。
     import main as business_main
 
-    original_read_existing = business_main.read_existing_ledger
+    business_main.read_existing_ledger = read_existing_ledger_fast
+    original_read_existing = read_existing_ledger_fast
     original_write_formal = business_main.write_formal_file
     context: dict[str, object] = {
         "existing": None,
@@ -118,7 +115,6 @@ def run() -> None:
 
     def capture_existing(path):
         ledger = original_read_existing(path)
-        # main.py 第一次读取的是运行前正式累计台账；后续回读验证不能覆盖快照。
         if context["existing"] is None:
             context["existing"] = deepcopy(ledger)
         return ledger
