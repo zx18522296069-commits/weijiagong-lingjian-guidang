@@ -17,6 +17,7 @@ from modules.archive_manager import should_archive
 from modules.drive_manager import DriveManager
 from modules.process_parts import build_current_state, validate_new_board
 from modules.process_parts import board_content_fingerprint
+from safe_main import business_outputs_changed
 
 
 class CoreWorkflowTests(unittest.TestCase):
@@ -52,6 +53,7 @@ class CoreWorkflowTests(unittest.TestCase):
         wb.save(path)
 
     def _make_ledger(self, path: Path, *, completed=False, board_id=""):
+        """建立旧版四页累计台账，用来锁定 V1 向后兼容。"""
         wb = Workbook()
         ws = wb.active
         ws.title = "累计加工台账"
@@ -143,10 +145,61 @@ class CoreWorkflowTests(unittest.TestCase):
             path = Path(td) / "ledger.xlsx"
             self._make_ledger(path, completed=True, board_id="#309")
             existing = read_existing_ledger(path)
+            self.assertEqual(existing["report_schema_version"], 1)
             self.assertEqual(len(existing["historical_rows"]), 1)
             self.assertEqual(existing["historical_rows"][0]["remaining"], 0)
             self.assertEqual(existing["historical_rows"][0]["board_sources"], "#309×2")
             self.assertIn("#309", existing["posted_boards"])
+
+    def test_completed_order_moves_to_completed_sheet_and_restores_as_permanent_fact(self):
+        with tempfile.TemporaryDirectory() as td:
+            source_path = Path(td) / "source.xlsx"
+            cumulative = Path(td) / "累计加工台账.xlsx"
+            pending = Path(td) / "当前待加工零件.xlsx"
+            self._make_source(source_path)
+            sources = read_source_summary(source_path)
+            key = ("D53K-1600A-0805", "D53K-1600A.1-1-13", 150.0, "W")
+            state = build_current_state(
+                sources,
+                existing_state={key: {"processed": 2, "board_sources": "#309×2"}},
+            )
+            self.assertEqual(state[0]["remaining"], 0)
+            self.assertEqual(state[0]["status"], "已完成")
+
+            generate_cumulative_report(state, [], [], [], cumulative, note="完成订单分流测试")
+            generate_pending_report(state, pending, note="完成订单分流测试")
+
+            wb = load_workbook(cumulative, data_only=True)
+            self.assertEqual(
+                wb.sheetnames,
+                ["累计加工台账", "加工流水", "板材入账记录", "异常记录", "已完成订单"],
+            )
+            main_values = [cell.value for row in wb["累计加工台账"].iter_rows() for cell in row]
+            completed_values = [cell.value for row in wb["已完成订单"].iter_rows() for cell in row]
+            self.assertNotIn("D53K-1600A.1-1-13", main_values)
+            self.assertIn("D53K-1600A.1-1-13", completed_values)
+
+            pending_values = [cell.value for row in load_workbook(pending, data_only=True)["当前待加工零件"].iter_rows() for cell in row]
+            self.assertNotIn("D53K-1600A.1-1-13", pending_values)
+
+            restored = read_existing_ledger(cumulative)
+            self.assertEqual(restored["report_schema_version"], 2)
+            self.assertEqual(len(restored["historical_rows"]), 1)
+            self.assertEqual(restored["state"][key]["processed"], 2)
+            self.assertEqual(restored["historical_rows"][0]["remaining"], 0)
+
+    def test_report_schema_upgrade_counts_as_formal_output_change(self):
+        base = {
+            "report_schema_version": 1,
+            "historical_rows": [],
+            "flows": [],
+            "board_records": [],
+            "anomalies": [],
+        }
+        upgraded = deepcopy(base)
+        upgraded["report_schema_version"] = 2
+        self.assertTrue(business_outputs_changed(base, upgraded))
+        self.assertFalse(business_outputs_changed(upgraded, deepcopy(upgraded)))
 
     def test_archive_requires_post_write_verification(self):
         self.assertTrue(should_archive(True))
@@ -257,7 +310,7 @@ class CoreWorkflowTests(unittest.TestCase):
             generate_cumulative_report(state, [], [], [], cumulative, note="测试")
             generate_pending_report(state, pending, note="测试")
             cwb = load_workbook(cumulative)
-            self.assertEqual(set(cwb.sheetnames), {"累计加工台账", "加工流水", "板材入账记录", "异常记录"})
+            self.assertEqual(set(cwb.sheetnames), {"累计加工台账", "加工流水", "板材入账记录", "异常记录", "已完成订单"})
             pws = load_workbook(pending)["当前待加工零件"]
             j_cells = [c for c in pws["J"] if c.value == 1]
             self.assertTrue(j_cells)
