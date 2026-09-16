@@ -88,40 +88,80 @@ class DriveManager:
                 return details["targetId"], item.get("name", "")
         return None
 
-    def list_order_source_files(self) -> list[dict]:
-        """
-        扫描“正在加工”直接子项；支持订单文件夹和文件夹快捷方式。
-
-        正式订单源允许两种已验证命名：
-        1. 文件名包含“汇总表”；
-        2. 若不存在“汇总表”命名文件，则使用文件名包含“模板”的 Excel，
-           其工作簿内部必须仍由读取层验证存在正式“汇总表”结构。
-
-        同一订单同一优先级若出现多个候选文件则阻断，禁止猜测使用哪一个。
-        不把正式台账/当前待加工表当成订单源。
-        """
+    def list_order_containers(self) -> list[dict]:
+        """返回“正在加工”根目录中的全部订单文件夹/文件夹快捷方式。"""
         result: list[dict] = []
         for item in self.list_children(self.working_folder_id):
             resolved = self.resolve_folder_item(item)
             if not resolved:
                 continue
             folder_id, container_name = resolved
-            excel_children = []
-            for child in self.list_children(folder_id):
-                name = str(child.get("name", ""))
-                lower = name.lower()
-                if child.get("mimeType") == FOLDER_MIME:
+            result.append({
+                "id": folder_id,
+                "name": container_name,
+                "source_item_id": item.get("id", folder_id),
+            })
+        return result
+
+    @staticmethod
+    def _is_excel_file(item: dict) -> bool:
+        name = str(item.get("name", ""))
+        return item.get("mimeType") != FOLDER_MIME and name.lower().endswith((".xlsx", ".xlsm", ".xls"))
+
+    def _order_excel_candidates(self, folder_id: str) -> list[dict]:
+        """
+        收集订单目录内可作为正式汇总表候选的 Excel。
+
+        安全规则：仅扫描订单目录本层和下一层子文件夹，不继续深层递归；
+        这样兼容“订单/全/模版.xlsm”这类实际目录，同时避免误抓更深层附件。
+        """
+        direct_children = self.list_children(folder_id)
+        excel_files = [dict(item) for item in direct_children if self._is_excel_file(item)]
+
+        for item in direct_children:
+            resolved = self.resolve_folder_item(item)
+            if not resolved:
+                continue
+            child_folder_id, child_folder_name = resolved
+            for nested in self.list_children(child_folder_id):
+                if not self._is_excel_file(nested):
                     continue
-                if not lower.endswith((".xlsx", ".xlsm", ".xls")):
-                    continue
-                excel_children.append(child)
+                candidate = dict(nested)
+                candidate["source_subfolder_name"] = child_folder_name
+                candidate["source_subfolder_id"] = child_folder_id
+                excel_files.append(candidate)
+        return excel_files
+
+    def list_order_source_files(self) -> list[dict]:
+        """
+        扫描“正在加工”订单目录；支持文件夹快捷方式和安全的一层子目录。
+
+        正式订单源允许两种已验证命名：
+        1. 文件名包含“汇总表”；
+        2. 若不存在“汇总表”命名文件，则使用文件名包含“模板”或“模版”的 Excel，
+           其工作簿内部必须仍由读取层验证存在正式“汇总表”结构。
+
+        同一订单同一优先级若出现多个候选文件则阻断，禁止猜测使用哪一个。
+        不把正式台账/当前待加工表当成订单源。
+        """
+        result: list[dict] = []
+        for container in self.list_order_containers():
+            folder_id = container["id"]
+            container_name = container["name"]
+            excel_children = self._order_excel_candidates(folder_id)
 
             preferred = [child for child in excel_children if "汇总表" in str(child.get("name", ""))]
-            fallback = [child for child in excel_children if "模板" in str(child.get("name", ""))]
+            fallback = [
+                child for child in excel_children
+                if "模板" in str(child.get("name", "")) or "模版" in str(child.get("name", ""))
+            ]
             candidates = preferred if preferred else fallback
 
             if len(candidates) > 1:
-                names = [str(child.get("name", "")) for child in candidates]
+                names = [
+                    f"{child.get('source_subfolder_name') + '/' if child.get('source_subfolder_name') else ''}{child.get('name', '')}"
+                    for child in candidates
+                ]
                 raise RuntimeError(
                     f"订单目录存在多个原始汇总表候选，禁止自动猜测: {container_name} -> {names}"
                 )
@@ -177,7 +217,6 @@ class DriveManager:
     def _cache_dir_for_file(self, file_id: str) -> Path | None:
         if self.download_cache_root is None:
             return None
-        # Google Drive file id 仅含 URL-safe 字符；仍做一次收敛，避免异常 id 形成路径穿越。
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", file_id)
         return self.download_cache_root / safe_id
 
@@ -201,19 +240,11 @@ class DriveManager:
             shutil.rmtree(cache_dir, ignore_errors=True)
 
     def download_file(self, file_id: str, save_path: str) -> str:
-        """
-        下载 Drive 文件。
-
-        若配置 DRIVE_DOWNLOAD_CACHE_DIR，则先只读取文件元数据（file id + modifiedTime + size）。
-        三者与缓存一致时直接复用本地缓存，不再重新下载；文件发生修改后才重新拉取。
-        正式文件被本程序写回时会主动清掉对应缓存，因此回读验证一定重新从 Drive 下载，
-        不会拿上传前缓存冒充远端验证结果。
-        """
+        """下载 Drive 文件；配置缓存时优先复用 file id + modifiedTime + size 一致的本地正文。"""
         service = self._service()
         target = Path(save_path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        metadata = None
         cache_path = None
         if self.download_cache_root is not None:
             metadata = self.get_file(file_id, fields="id,modifiedTime,size")
@@ -235,7 +266,6 @@ class DriveManager:
         if cache_path is not None:
             cache_dir = cache_path.parent
             cache_dir.mkdir(parents=True, exist_ok=True)
-            # 同一个 Drive 文件只保留当前版本，防止长期运行持续膨胀缓存。
             for old in cache_dir.glob("*.bin"):
                 if old != cache_path:
                     old.unlink(missing_ok=True)
@@ -254,7 +284,6 @@ class DriveManager:
 
     def update_file_content(self, file_id: str, file_path: str) -> dict:
         """覆盖既有 Drive 文件内容，保留原文件 ID/位置。"""
-        # 必须先清掉旧缓存：正式写回后的回读验证必须真的读取远端新内容。
         self._invalidate_download_cache(file_id)
         media = MediaFileUpload(file_path, resumable=False)
         return self._service().files().update(
