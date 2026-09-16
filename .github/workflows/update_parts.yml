@@ -38,6 +38,7 @@ jobs:
       PYTHONUNBUFFERED: '1'
       DRIVE_DOWNLOAD_CACHE_DIR: '.cache/drive_files'
       SOURCE_RECORD_CACHE_FILE: '.cache/source_records.json'
+      RUNTIME_STATE_FILE: 'runtime_state/state.json'
       GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
       GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
@@ -49,20 +50,22 @@ jobs:
       ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
 
       # 前端“立即执行”和控制台后台调度都通过 workflow_dispatch 调用。
-      # GitHub 仓库自身不维护任何固定业务 cron。
+      # 本仓库自身不维护第二套固定业务 cron。
       TEST_MODE: ${{ inputs.mode == 'test' && 'true' || 'false' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore incremental cache
+      - name: Restore production runtime cache
         uses: actions/cache/restore@v4
         with:
-          path: .cache
-          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
+          path: |
+            runtime_state
+            .cache
+          key: weijiagong-runtime-production-${{ github.run_id }}
           restore-keys: |
-            weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-
+            weijiagong-runtime-production-
             weijiagong-v2-
 
       - name: Setup Python
@@ -82,12 +85,14 @@ jobs:
       - name: Run update
         run: python safe_main.py
 
-      - name: Save incremental cache
+      - name: Save production runtime cache
         if: ${{ success() && inputs.mode == 'production' }}
         uses: actions/cache/save@v4
         with:
-          path: .cache
-          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
+          path: |
+            runtime_state
+            .cache
+          key: weijiagong-runtime-production-${{ github.run_id }}
 
       - name: Save execution log
         if: always()
