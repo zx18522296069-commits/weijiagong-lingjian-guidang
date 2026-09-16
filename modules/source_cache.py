@@ -1,8 +1,11 @@
 """订单原始汇总表的结构化解析缓存。
 
 缓存只用于避免对未变化的订单源重复下载/解析；正式事实源仍然是 Google Drive
-“正在加工”中的原始汇总表。缓存命中签名包含 file id、modifiedTime、md5Checksum、
+“正在加工”中的原始汇总表。当前缓存签名包含 file id、modifiedTime、md5Checksum、
 父目录、文件名和订单目录名；任一变化都会重新下载并解析。
+
+从 v1 升级到 v2 时允许一次安全迁移：只有旧签名中的 modifiedTime、size、文件名、
+订单目录名仍全部一致，才复用旧解析结果，并立即把该条目升级为当前完整签名。
 """
 
 from __future__ import annotations
@@ -12,12 +15,14 @@ from pathlib import Path
 
 
 CACHE_VERSION = 2
+LEGACY_CACHE_VERSION = 1
 
 
 class SourceRecordCache:
     def __init__(self, path: Path):
         self.path = path
         self.entries: dict[str, dict] = {}
+        self.loaded_version: int | None = None
         self._load()
 
     def _load(self) -> None:
@@ -27,11 +32,13 @@ class SourceRecordCache:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return
-        if payload.get("version") != CACHE_VERSION:
+        version = payload.get("version")
+        if version not in {CACHE_VERSION, LEGACY_CACHE_VERSION}:
             return
         entries = payload.get("entries")
         if isinstance(entries, dict):
             self.entries = entries
+            self.loaded_version = int(version)
 
     @staticmethod
     def signature(item: dict) -> dict:
@@ -44,6 +51,18 @@ class SourceRecordCache:
             "order_container_name": str(item.get("order_container_name", "")),
         }
 
+    @staticmethod
+    def _legacy_signature_matches(entry_signature: dict, item: dict) -> bool:
+        if not isinstance(entry_signature, dict):
+            return False
+        expected = {
+            "modifiedTime": str(item.get("modifiedTime", "")),
+            "size": str(item.get("size", "")),
+            "name": str(item.get("name", "")),
+            "order_container_name": str(item.get("order_container_name", "")),
+        }
+        return all(str(entry_signature.get(key, "")) == value for key, value in expected.items())
+
     def get(self, item: dict) -> dict | None:
         file_id = str(item.get("id", ""))
         if not file_id:
@@ -51,8 +70,16 @@ class SourceRecordCache:
         entry = self.entries.get(file_id)
         if not isinstance(entry, dict):
             return None
-        if entry.get("signature") != self.signature(item):
-            return None
+
+        current_signature = self.signature(item)
+        entry_signature = entry.get("signature")
+        if entry_signature != current_signature:
+            if self.loaded_version == LEGACY_CACHE_VERSION and self._legacy_signature_matches(entry_signature, item):
+                # 旧缓存只在旧签名完全一致时允许复用一次；随后保存即升级到 v2。
+                entry["signature"] = current_signature
+            else:
+                return None
+
         status = entry.get("status")
         if status == "ok" and isinstance(entry.get("records"), list):
             return entry
@@ -96,3 +123,4 @@ class SourceRecordCache:
             encoding="utf-8",
         )
         temp_path.replace(self.path)
+        self.loaded_version = CACHE_VERSION
