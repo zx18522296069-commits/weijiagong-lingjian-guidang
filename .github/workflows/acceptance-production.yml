@@ -1,4 +1,4 @@
-# acceptance-pass: diagnostic-7
+# acceptance-pass: cleanup-8
 name: 临时未加工生产验收
 
 on:
@@ -57,11 +57,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Syntax check
-        run: python -m compileall -q main.py safe_main.py production_main.py diagnose_write_guard.py self_healing_main.py modules tests
+        run: python -m compileall -q main.py safe_main.py production_main.py self_healing_main.py modules tests
       - name: Regression tests
         run: python -m unittest discover -s tests -v
-      - name: Run counted no-write diagnostic
-        run: python diagnose_write_guard.py
+      - name: Run cleanup production acceptance
+        run: python production_main.py
+      - name: Save source cache
+        if: ${{ success() }}
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
+      - name: Save runtime state
+        if: ${{ success() }}
+        uses: actions/cache/save@v4
+        with:
+          path: runtime_state
+          key: weijiagong-runtime-v1-${{ github.run_id }}
       - name: Save execution log
         if: always()
         uses: actions/upload-artifact@v4
