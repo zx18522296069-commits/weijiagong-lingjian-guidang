@@ -63,6 +63,7 @@ jobs:
           key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
           restore-keys: |
             weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-
+            weijiagong-v2-
 
       - name: Setup Python
         uses: actions/setup-python@v5
