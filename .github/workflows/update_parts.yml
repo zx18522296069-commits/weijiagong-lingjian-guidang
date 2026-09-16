@@ -42,8 +42,6 @@ jobs:
       SPLIT_FOLDER_ID: '1lr9AUd9hO81Ylbkt4iJf88og4aazC797'
       RESULT_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
       ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
-      CUMULATIVE_FILE_ID: '1BDXfJN8afgla9Z9Al-tVQmqP107afkPb'
-      PENDING_FILE_ID: '1Lw91mzMQkqEx4sAn_U6JgHaDfa6bQpUG'
 
       # 控制台手动执行固定传 production；直接在 GitHub 手动执行默认 test。
       # 控制台定时启用时，schedule 事件自动按正式生产运行。
@@ -70,13 +68,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Syntax check
-        run: python -m compileall -q main.py modules tests
+        run: python -m compileall -q main.py self_healing_main.py modules tests
 
       - name: Regression tests
         run: python -m unittest discover -s tests -v
 
       - name: Run update
-        run: python main.py
+        run: python self_healing_main.py
 
       - name: Save incremental cache
         if: always()
