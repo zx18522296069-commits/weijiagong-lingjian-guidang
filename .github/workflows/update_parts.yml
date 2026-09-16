@@ -1,9 +1,6 @@
 name: 未加工零件自动更新
 
 on:
-  schedule:
-    - cron: '0 4 * * *'
-    - cron: '0 9 * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -11,14 +8,16 @@ on:
         required: true
         default: 'test'
         type: choice
-        options: [test, production]
+        options:
+          - test
+          - production
       trigger_source:
         description: '触发来源（控制台/人工）'
         required: false
         default: 'manual'
         type: string
       scheduled_for:
-        description: '计划时间，仅用于追踪'
+        description: '控制台计划时间，仅用于追踪和防重复'
         required: false
         default: ''
         type: string
@@ -34,9 +33,11 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     env:
       PYTHONUNBUFFERED: '1'
-      RUNTIME_STATE_FILE: 'runtime_state/state.json'
+      DRIVE_DOWNLOAD_CACHE_DIR: '.cache/drive_files'
+      SOURCE_RECORD_CACHE_FILE: '.cache/source_records.json'
       GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
       GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
@@ -46,20 +47,25 @@ jobs:
       SPLIT_FOLDER_ID: '1lr9AUd9hO81Ylbkt4iJf88og4aazC797'
       RESULT_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
       ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
-      TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'test' && 'true' || 'false' }}
+
+      # 前端“立即执行”和控制台后台调度都通过 workflow_dispatch 调用。
+      # GitHub 仓库自身不维护任何固定业务 cron。
+      TEST_MODE: ${{ inputs.mode == 'test' && 'true' || 'false' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Restore production runtime state
+      - name: Restore incremental cache
         uses: actions/cache/restore@v4
         with:
-          path: runtime_state
-          key: weijiagong-runtime-production-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
           restore-keys: |
-            weijiagong-runtime-production-
+            weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -73,14 +79,14 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Run update
-        run: python main.py
+        run: python self_healing_main.py
 
-      - name: Save production runtime state
-        if: success() && (github.event_name == 'schedule' || inputs.mode == 'production')
+      - name: Save incremental cache
+        if: always()
         uses: actions/cache/save@v4
         with:
-          path: runtime_state
-          key: weijiagong-runtime-production-${{ github.run_id }}
+          path: .cache
+          key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
 
       - name: Save execution log
         if: always()
