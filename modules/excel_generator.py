@@ -116,8 +116,6 @@ def _write_order_sections(ws, rows: list[dict], *, include_completed_orders: boo
             ws.cell(row_cursor, 5).number_format = "0.0"
             ws.cell(row_cursor, 7).number_format = "0.000"
             ws.cell(row_cursor, 11).number_format = "0.000"
-
-            # 用户确认模板：J列“当前剩余”加大、加粗、居中。
             ws.cell(row_cursor, 10).font = Font(size=14, bold=True)
             fill = _status_fill(r["status"])
             if fill:
@@ -154,6 +152,41 @@ def _write_records_sheet(ws, headers: list[str], records: list[dict]):
     ws.freeze_panes = "A2"
 
 
+def _append_overprocessing_anomalies(rows: list[dict], anomalies: list[dict]) -> list[dict]:
+    """负数剩余不是入账阻断，但必须永久记录为“超加工/待核查”。"""
+    result = [dict(item) for item in anomalies]
+    existing_keys = {
+        (
+            str(item.get("异常类型", "")), str(item.get("订单号", "")),
+            str(item.get("图号", "")), str(item.get("厚度(mm)", "")),
+        )
+        for item in result
+    }
+    for row in rows:
+        remaining = int(row.get("remaining", 0))
+        if remaining >= 0:
+            continue
+        key = ("超加工/待核查", str(row.get("order", "")), str(row.get("drawing", "")), str(row.get("thickness", "")))
+        if key in existing_keys:
+            continue
+        excess = abs(remaining)
+        result.append({
+            "板材号": row.get("board_sources", ""),
+            "业务日期": "",
+            "订单号": row.get("order", ""),
+            "图号": row.get("drawing", ""),
+            "厚度(mm)": row.get("thickness", ""),
+            "数量": excess,
+            "异常类型": "超加工/待核查",
+            "处理结论": "正式入账，保留负数",
+            "未移动原因": "",
+            "处理建议": "核对订单总数量和累计加工数量；禁止自动把负数修正为0。",
+            "说明": f"订单总数量={row.get('quantity', 0)}，累计已加工={row.get('processed', 0)}，当前剩余={remaining}；基础身份校验通过，本次加工照实入账。",
+        })
+        existing_keys.add(key)
+    return result
+
+
 def generate_cumulative_report(
     rows: list[dict],
     flows: list[dict],
@@ -173,7 +206,7 @@ def generate_cumulative_report(
     board_ws = wb.create_sheet("板材入账记录")
     _write_records_sheet(board_ws, BOARD_HEADERS, board_records)
     anomaly_ws = wb.create_sheet("异常记录")
-    _write_records_sheet(anomaly_ws, ANOMALY_HEADERS, anomalies)
+    _write_records_sheet(anomaly_ws, ANOMALY_HEADERS, _append_overprocessing_anomalies(rows, anomalies))
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
