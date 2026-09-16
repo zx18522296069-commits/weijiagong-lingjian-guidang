@@ -33,14 +33,12 @@ jobs:
             modules/drive_manager.py \
             modules/excel_generator.py \
             modules/process_parts.py \
-            .github/workflows/update_parts.yml \
             README.md
           git rm -f --ignore-unmatch \
             modules/runtime_state.py \
             tests/test_incremental_acceptance.py \
             tests/test_runtime_state.py
-          git rm -f .github/workflows/rollback_unprocessed_runtime.yml
           git add -A
           git diff --cached --stat
-          git commit -m "回滚未加工到生产稳定基线"
+          git commit -m "回滚未加工运行逻辑到生产稳定基线"
           git push origin HEAD:main
