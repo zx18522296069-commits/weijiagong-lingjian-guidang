@@ -1,5 +1,6 @@
 name: 未加工真实冒烟测试（临时）
 
+# smoke-generation: 2
 on:
   push:
     paths:
