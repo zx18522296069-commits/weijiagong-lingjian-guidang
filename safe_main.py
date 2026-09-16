@@ -19,6 +19,7 @@ from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 
+from modules.excel_generator import REPORT_SCHEMA_VERSION
 from modules.fast_ledger import read_existing_ledger_fast
 from modules.formal_files import CUMULATIVE_NAME, PENDING_NAME
 from modules.logger import get_logger
@@ -100,12 +101,13 @@ def _sorted_records(rows: list[dict], fields: tuple[str, ...] | None = None) -> 
 
 
 def business_ledger_signature(ledger: dict) -> str:
-    """正式业务事实签名；普通阻断日志不触发写回，超加工异常属于永久业务事实。"""
+    """正式业务事实+报表结构签名；普通阻断日志不触发写回，超加工异常属于永久业务事实。"""
     business_anomalies = [
         row for row in ledger.get("anomalies", [])
         if str(row.get("异常类型", "")).strip() == "超加工/待核查"
     ]
     payload = {
+        "report_schema_version": int(ledger.get("report_schema_version", 1) or 1),
         "rows": _sorted_records(list(ledger.get("historical_rows", [])), _ROW_FIELDS),
         "flows": _sorted_records(list(ledger.get("flows", []))),
         "board_records": _sorted_records(list(ledger.get("board_records", []))),
@@ -233,12 +235,18 @@ def run() -> None:
     pending_meta = official[PENDING_NAME]
     cached_ledger = runtime_state.get_cumulative_ledger(cumulative_meta)
     source_cache_hit = _all_sources_cached(source_files, source_cache_path)
+    cached_schema_version = int((cached_ledger or {}).get("report_schema_version", 1) or 1)
+    schema_outdated = cached_ledger is not None and cached_schema_version < REPORT_SCHEMA_VERSION
     logger.info(
         "累计台账｜cache=" + ("命中" if cached_ledger is not None else "未命中")
         + f"｜Drive MD5变化={'否' if cached_ledger is not None else '是/未知'}｜是否下载正式累计Excel={'否' if cached_ledger is not None else '需要初始化'}"
+        + f"｜报表格式V{cached_schema_version}->V{REPORT_SCHEMA_VERSION}{'（需升级）' if schema_outdated else ''}"
     )
 
-    if cached_ledger is not None and source_cache_hit and not pending_files and not missing:
+    if schema_outdated:
+        logger.info("报表格式升级：即使业务数量无变化，也将重新生成并刷新两份正式 Excel")
+
+    if cached_ledger is not None and source_cache_hit and not pending_files and not missing and not schema_outdated:
         logger.info("无变化快速退出｜订单Excel正文下载=0｜累计Excel正文下载=0｜拆图完成文件正文下载=0｜正式Excel上传=0")
         _log_performance(total_started=total_started, cache_seconds=cache_seconds, metadata_seconds=metadata_seconds, timings=timings, downloads=downloads, uploads=0)
         return
@@ -317,15 +325,15 @@ def run() -> None:
             changed = business_outputs_changed(context["existing"], candidate)
             context["business_changed"] = changed
             if not changed:
-                logger.info("写回保护｜累计业务事实无变化：跳过累计加工台账上传")
+                logger.info("写回保护｜累计业务事实与报表格式均无变化：跳过累计加工台账上传")
                 return {"id": current["id"], "_skipped": True}
-            logger.info("写回保护｜检测到正式业务/状态变化：允许更新累计加工台账")
+            logger.info("写回保护｜检测到正式业务/状态/报表格式变化：允许更新累计加工台账")
             result = _write(drive_obj, current, local_path)
             context["cumulative_file_id"] = str(result["id"])
             return result
         if name == PENDING_NAME:
             if current is not None and context["business_changed"] is False:
-                logger.info("写回保护｜累计业务事实无变化：跳过当前待加工零件上传")
+                logger.info("写回保护｜累计业务事实与报表格式均无变化：跳过当前待加工零件上传")
                 return {"id": current["id"], "_skipped": True}
             return _write(drive_obj, current, local_path)
         return _write(drive_obj, current, local_path)
