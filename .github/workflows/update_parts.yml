@@ -76,6 +76,21 @@ jobs:
           restore-keys: |
             weijiagong-runtime-v1-
 
+      - name: Snapshot restored cache fingerprints
+        id: cache_before
+        shell: bash
+        run: |
+          hash_tree() {
+            local dir="$1"
+            if [ ! -d "$dir" ] || ! find "$dir" -type f -print -quit | grep -q .; then
+              printf 'empty'
+              return
+            fi
+            (cd "$dir" && find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum | awk '{print $1}'
+          }
+          echo "source=$(hash_tree .cache)" >> "$GITHUB_OUTPUT"
+          echo "runtime=$(hash_tree runtime_state)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -91,15 +106,40 @@ jobs:
       - name: Run update
         run: python production_main.py
 
+      - name: Detect cache changes
+        id: cache_changes
+        shell: bash
+        run: |
+          hash_tree() {
+            local dir="$1"
+            if [ ! -d "$dir" ] || ! find "$dir" -type f -print -quit | grep -q .; then
+              printf 'empty'
+              return
+            fi
+            (cd "$dir" && find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum | awk '{print $1}'
+          }
+          source_after="$(hash_tree .cache)"
+          runtime_after="$(hash_tree runtime_state)"
+          if [ "${{ steps.cache_before.outputs.source }}" = "$source_after" ]; then
+            echo "source_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "source_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "${{ steps.cache_before.outputs.runtime }}" = "$runtime_after" ]; then
+            echo "runtime_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "runtime_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Save source cache
-        if: ${{ success() && inputs.mode == 'production' }}
+        if: ${{ success() && inputs.mode == 'production' && steps.cache_changes.outputs.source_changed == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: .cache
           key: weijiagong-v2-${{ hashFiles('modules/excel_reader.py', 'modules/source_cache.py') }}-${{ github.run_id }}
 
       - name: Save runtime state
-        if: ${{ success() && inputs.mode == 'production' }}
+        if: ${{ success() && inputs.mode == 'production' && steps.cache_changes.outputs.runtime_changed == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: runtime_state
