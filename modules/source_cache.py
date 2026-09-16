@@ -1,8 +1,8 @@
 """订单原始汇总表的结构化解析缓存。
 
 缓存只用于避免对未变化的订单源重复下载/解析；正式事实源仍然是 Google Drive
-“正在加工”中的原始汇总表。缓存命中条件同时包含 file id、modifiedTime、size、
-文件名和订单目录名，任一变化都会重新下载并解析。
+“正在加工”中的原始汇总表。缓存命中签名包含 file id、modifiedTime、md5Checksum、
+父目录、文件名和订单目录名；任一变化都会重新下载并解析。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 class SourceRecordCache:
@@ -36,8 +36,10 @@ class SourceRecordCache:
     @staticmethod
     def signature(item: dict) -> dict:
         return {
+            "file_id": str(item.get("id", "")),
             "modifiedTime": str(item.get("modifiedTime", "")),
-            "size": str(item.get("size", "")),
+            "md5Checksum": str(item.get("md5Checksum", "")),
+            "parent_folder_id": str(item.get("parent_folder_id", "")),
             "name": str(item.get("name", "")),
             "order_container_name": str(item.get("order_container_name", "")),
         }
