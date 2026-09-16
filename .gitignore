@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .update_parts.lock
+.cache/
 logs/
 artifacts/
 .DS_Store
