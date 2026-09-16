@@ -70,7 +70,7 @@ class BaselineWorkbookTests(unittest.TestCase):
             cumulative = load_workbook(cumulative_path, read_only=True, data_only=True)
             self.assertEqual(
                 cumulative.sheetnames,
-                ["累计加工台账", "加工流水", "板材入账记录", "异常记录"],
+                ["累计加工台账", "加工流水", "板材入账记录", "异常记录", "已完成订单"],
             )
             pending = load_workbook(pending_path, read_only=True, data_only=True)
             self.assertEqual(pending.sheetnames, ["当前待加工零件"])
