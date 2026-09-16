@@ -11,6 +11,10 @@ from openpyxl.utils import get_column_letter
 
 from modules.process_parts import group_by_order, order_is_complete
 
+REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_KEYWORD = f"weijiagong-report-schema-v{REPORT_SCHEMA_VERSION}"
+COMPLETED_SHEET_NAME = "已完成订单"
+
 DETAIL_HEADERS = [
     "图号", "厚度(mm)", "坡口", "长(mm)", "宽(mm)", "订单总数量",
     "零件总重量(t)", "板材号/加工来源", "累计已加工", "当前剩余",
@@ -54,6 +58,16 @@ def _configure_widths(ws):
         ws.column_dimensions[col].width = width
 
 
+def _split_active_completed_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """按整单判断分流；只有整单所有零件 remaining==0 才进入“已完成订单”。"""
+    active_rows: list[dict] = []
+    completed_rows: list[dict] = []
+    for _order, order_rows in group_by_order(rows).items():
+        target = completed_rows if order_is_complete(order_rows) else active_rows
+        target.extend(order_rows)
+    return active_rows, completed_rows
+
+
 def _write_kpis(ws, active_rows: list[dict], note: str = ""):
     grouped = group_by_order(active_rows)
     active_orders = {order: rows for order, rows in grouped.items() if not order_is_complete(rows)}
@@ -75,6 +89,27 @@ def _write_kpis(ws, active_rows: list[dict], note: str = ""):
         ws["A4"] = note
         ws["A4"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         ws.row_dimensions[4].height = 45
+
+
+def _write_completed_kpis(ws, completed_rows: list[dict], note: str = ""):
+    grouped = group_by_order(completed_rows)
+    ws["A1"] = "已完成订单数"
+    ws["E1"] = "已完成零件项"
+    ws["I1"] = "累计完成件数"
+    ws["A2"] = len(grouped)
+    ws["E2"] = len(completed_rows)
+    ws["I2"] = sum(int(r.get("quantity", 0)) for r in completed_rows)
+    for cell in (ws["A1"], ws["E1"], ws["I1"]):
+        cell.font = Font(bold=True, size=12)
+
+    ws.merge_cells("A4:L4")
+    archive_note = (
+        "整单所有零件当前剩余=0后，从“累计加工台账”主页面移入本页永久备份；"
+        "加工流水、板材入账记录、异常记录仍永久保留。若订单事实后续增加导致剩余重新大于0，会自动返回主页面。"
+    )
+    ws["A4"] = archive_note + (f" {note}" if note else "")
+    ws["A4"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    ws.row_dimensions[4].height = 60
 
 
 def _write_order_sections(ws, rows: list[dict], *, include_completed_orders: bool):
@@ -130,6 +165,14 @@ def _write_order_sections(ws, rows: list[dict], *, include_completed_orders: boo
 def _build_main_sheet(ws, rows: list[dict], *, note: str, include_completed_orders: bool):
     _write_kpis(ws, rows, note)
     _write_order_sections(ws, rows, include_completed_orders=include_completed_orders)
+    _configure_widths(ws)
+    _set_common_alignment(ws)
+    ws.freeze_panes = "A6"
+
+
+def _build_completed_sheet(ws, rows: list[dict], *, note: str):
+    _write_completed_kpis(ws, rows, note)
+    _write_order_sections(ws, rows, include_completed_orders=True)
     _configure_widths(ws)
     _set_common_alignment(ws)
     ws.freeze_panes = "A6"
@@ -237,9 +280,12 @@ def generate_cumulative_report(
     note: str = "",
 ):
     wb = Workbook()
+    wb.properties.keywords = REPORT_SCHEMA_KEYWORD
+    active_rows, completed_rows = _split_active_completed_rows(rows)
+
     ws = wb.active
     ws.title = "累计加工台账"
-    _build_main_sheet(ws, rows, note=note, include_completed_orders=True)
+    _build_main_sheet(ws, active_rows, note=note, include_completed_orders=True)
 
     flow_ws = wb.create_sheet("加工流水")
     _write_records_sheet(flow_ws, FLOW_HEADERS, flows)
@@ -247,6 +293,8 @@ def generate_cumulative_report(
     _write_records_sheet(board_ws, BOARD_HEADERS, board_records)
     anomaly_ws = wb.create_sheet("异常记录")
     _write_records_sheet(anomaly_ws, ANOMALY_HEADERS, _append_overprocessing_anomalies(rows, anomalies))
+    completed_ws = wb.create_sheet(COMPLETED_SHEET_NAME)
+    _build_completed_sheet(completed_ws, completed_rows, note=note)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
@@ -255,9 +303,11 @@ def generate_cumulative_report(
 
 def generate_pending_report(rows: list[dict], output_path, *, note: str = ""):
     wb = Workbook()
+    wb.properties.keywords = REPORT_SCHEMA_KEYWORD
+    active_rows, _completed_rows = _split_active_completed_rows(rows)
     ws = wb.active
     ws.title = "当前待加工零件"
-    _build_main_sheet(ws, rows, note=note, include_completed_orders=False)
+    _build_main_sheet(ws, active_rows, note=note, include_completed_orders=True)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     return output_path
