@@ -47,11 +47,11 @@ class DriveManager:
         return self.service or self.connect()
 
     def list_children(self, folder_id: str) -> list[dict]:
-        """只列指定目录的直接子项，不递归。"""
+        """只列指定目录的直接子项，不递归；只读取 metadata，不下载正文。"""
         service = self._service()
         query = f"'{folder_id}' in parents and trashed=false"
         fields = (
-            "nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,"
+            "nextPageToken,files(id,name,mimeType,parents,modifiedTime,md5Checksum,size,"
             "shortcutDetails(targetId,targetMimeType))"
         )
         items: list[dict] = []
@@ -71,7 +71,7 @@ class DriveManager:
                 break
         return items
 
-    def get_file(self, file_id: str, fields: str = "id,name,mimeType,parents,modifiedTime,size") -> dict:
+    def get_file(self, file_id: str, fields: str = "id,name,mimeType,parents,modifiedTime,md5Checksum,size") -> dict:
         return self._service().files().get(
             fileId=file_id,
             fields=fields,
@@ -106,7 +106,7 @@ class DriveManager:
     @staticmethod
     def _is_excel_file(item: dict) -> bool:
         name = str(item.get("name", ""))
-        return item.get("mimeType") != FOLDER_MIME and name.lower().endswith((".xlsx", ".xlsm", ".xls"))
+        return item.get("mimeType") not in {FOLDER_MIME, SHORTCUT_MIME} and name.lower().endswith((".xlsx", ".xlsm", ".xls"))
 
     def _order_excel_candidates(self, folder_id: str) -> list[dict]:
         """
@@ -116,7 +116,13 @@ class DriveManager:
         这样兼容“订单/全/模版.xlsm”这类实际目录，同时避免误抓更深层附件。
         """
         direct_children = self.list_children(folder_id)
-        excel_files = [dict(item) for item in direct_children if self._is_excel_file(item)]
+        excel_files = []
+        for item in direct_children:
+            if not self._is_excel_file(item):
+                continue
+            candidate = dict(item)
+            candidate["parent_folder_id"] = folder_id
+            excel_files.append(candidate)
 
         for item in direct_children:
             resolved = self.resolve_folder_item(item)
@@ -129,6 +135,7 @@ class DriveManager:
                 candidate = dict(nested)
                 candidate["source_subfolder_name"] = child_folder_name
                 candidate["source_subfolder_id"] = child_folder_id
+                candidate["parent_folder_id"] = child_folder_id
                 excel_files.append(candidate)
         return excel_files
 
@@ -171,6 +178,7 @@ class DriveManager:
             child = candidates[0]
             result.append({
                 **child,
+                "parent_folder_id": child.get("parent_folder_id") or folder_id,
                 "order_container_name": container_name,
                 "order_folder_id": folder_id,
             })
@@ -185,7 +193,7 @@ class DriveManager:
         for item in self.list_children(self.split_folder_id):
             name = str(item.get("name", ""))
             lower = name.lower()
-            if item.get("mimeType") == FOLDER_MIME:
+            if item.get("mimeType") in {FOLDER_MIME, SHORTCUT_MIME}:
                 continue
             if "_完成" not in name:
                 continue
@@ -228,6 +236,7 @@ class DriveManager:
             [
                 file_id,
                 str(metadata.get("modifiedTime", "")),
+                str(metadata.get("md5Checksum", "")),
                 str(metadata.get("size", "")),
             ]
         )
@@ -240,14 +249,14 @@ class DriveManager:
             shutil.rmtree(cache_dir, ignore_errors=True)
 
     def download_file(self, file_id: str, save_path: str) -> str:
-        """下载 Drive 文件；配置缓存时优先复用 file id + modifiedTime + size 一致的本地正文。"""
+        """下载 Drive 文件；配置缓存时优先复用 file id + modifiedTime + MD5 + size 一致的本地正文。"""
         service = self._service()
         target = Path(save_path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
         cache_path = None
         if self.download_cache_root is not None:
-            metadata = self.get_file(file_id, fields="id,modifiedTime,size")
+            metadata = self.get_file(file_id, fields="id,modifiedTime,md5Checksum,size")
             cache_path = self._cache_path_for_metadata(file_id, metadata)
             if cache_path and cache_path.exists():
                 expected_size = metadata.get("size")
@@ -278,7 +287,7 @@ class DriveManager:
         return self._service().files().create(
             body=metadata,
             media_body=media,
-            fields="id,name,parents,modifiedTime,size",
+            fields="id,name,parents,modifiedTime,md5Checksum,size",
             supportsAllDrives=True,
         ).execute()
 
@@ -289,7 +298,7 @@ class DriveManager:
         return self._service().files().update(
             fileId=file_id,
             media_body=media,
-            fields="id,name,parents,modifiedTime,size",
+            fields="id,name,parents,modifiedTime,md5Checksum,size",
             supportsAllDrives=True,
         ).execute()
 
