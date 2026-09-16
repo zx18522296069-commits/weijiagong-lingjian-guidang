@@ -82,7 +82,7 @@ jobs:
         run: python safe_main.py
 
       - name: Save incremental cache
-        if: always()
+        if: ${{ success() && inputs.mode == 'production' }}
         uses: actions/cache/save@v4
         with:
           path: .cache
