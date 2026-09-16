@@ -2,10 +2,10 @@
 
 在现有稳定业务主流程外增加一层“正式 Excel 写回保护”：
 - 阻断板只记录运行日志，不因为新增阻断异常/运行说明而改写正式 Excel；
-- 只有订单事实、累计数量、加工流水或板材入账记录真正变化时，才允许覆盖两份正式表；
+- 只有订单事实、累计数量、加工流水、板材入账记录或正式状态规范化真正变化时，才允许覆盖两份正式表；
 - 补归档场景可在不重写正式表的情况下继续完成归档；
 - 累计台账采用只读顺序扫描，避免 openpyxl read_only 随机访问反复扫 XML；
-- 不改变 main.py 现有的匹配、整板校验、幂等和归档规则。
+- 不改变 main.py 现有的确定性匹配、整板校验、幂等和归档规则。
 """
 
 from __future__ import annotations
@@ -77,10 +77,7 @@ def _scalar(value):
         if math.isfinite(number):
             return round(number, 9)
         return str(value)
-    text = str(value).strip()
-    if text == "未开始":
-        return "未加工"
-    return text
+    return str(value).strip()
 
 
 def _normalized_dict(row: dict, fields: tuple[str, ...] | None = None) -> dict:
@@ -97,7 +94,7 @@ def _sorted_records(rows: list[dict], fields: tuple[str, ...] | None = None) -> 
 
 
 def business_ledger_signature(ledger: dict) -> str:
-    """只比较正式业务事实；故意忽略“异常记录”和运行说明。"""
+    """比较正式业务事实与正式状态；故意忽略“异常记录”和运行说明。"""
     payload = {
         "rows": _sorted_records(list(ledger.get("historical_rows", [])), _ROW_FIELDS),
         "flows": _sorted_records(list(ledger.get("flows", []))),
@@ -120,7 +117,10 @@ def _log_order_source_coverage(drive) -> None:
     logger.info(f"正在加工订单目录 {len(containers)} 个")
     logger.info(f"其中识别到订单原始汇总表 {len(sources)} 个")
     for item in missing:
-        logger.warning(f"订单目录未找到正式汇总表，未纳入零件事实源：{item.get('name', '')}")
+        name = item.get("name", "")
+        logger.warning(f"订单目录未找到正式汇总表，未纳入零件事实源：{name}")
+        # 兼容控制台现有结果解析器；这是订单源异常，不得计入板材数量。
+        logger.warning(f"订单源未完成 {name}: 未找到正式汇总表")
 
 
 def run() -> None:
@@ -177,14 +177,14 @@ def run() -> None:
                     "写回保护｜累计业务事实无变化：跳过累计加工台账上传；"
                     "阻断异常仅保留运行日志，不改正式台账"
                 )
-                return {"id": current["id"]}
-            logger.info("写回保护｜检测到累计业务事实变化：允许更新累计加工台账")
+                return {"id": current["id"], "_skipped": True}
+            logger.info("写回保护｜检测到正式业务/状态变化：允许更新累计加工台账")
             return original_write_formal(drive_obj, current, local_path)
 
         if name == PENDING_NAME:
             if current is not None and context["business_changed"] is False:
                 logger.info("写回保护｜累计业务事实无变化：跳过当前待加工零件上传")
-                return {"id": current["id"]}
+                return {"id": current["id"], "_skipped": True}
             return original_write_formal(drive_obj, current, local_path)
 
         return original_write_formal(drive_obj, current, local_path)
