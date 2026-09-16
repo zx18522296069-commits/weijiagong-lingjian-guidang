@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import tempfile
 import unittest
 from copy import deepcopy
+from pathlib import Path
 
-from safe_main import business_outputs_changed, business_ledger_signature, legacy_block_compat_message
+from safe_main import (
+    business_outputs_changed,
+    business_ledger_signature,
+    legacy_block_compat_message,
+    verify_uploaded_file_metadata,
+)
 
 
 class SafeWriteGuardTests(unittest.TestCase):
@@ -147,6 +155,39 @@ class SafeWriteGuardTests(unittest.TestCase):
             "板材 #2326 阻断：检测到历史入账记录；本次无法复核内容，不重复扣减、不归档。",
         )
         self.assertIsNone(legacy_block_compat_message(message, seen))
+
+    def test_uploaded_file_is_verified_by_metadata_md5_and_size(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "test.xlsx"
+            path.write_bytes(b"verified-bytes")
+            expected_md5 = hashlib.md5(path.read_bytes()).hexdigest()
+
+            class Drive:
+                def get_file(self, file_id, fields):
+                    self.file_id = file_id
+                    self.fields = fields
+                    return {
+                        "id": file_id,
+                        "md5Checksum": expected_md5,
+                        "size": str(path.stat().st_size),
+                    }
+
+            drive = Drive()
+            metadata = verify_uploaded_file_metadata(drive, "file-1", path)
+            self.assertEqual(metadata["id"], "file-1")
+            self.assertIn("md5Checksum", drive.fields)
+
+    def test_uploaded_file_md5_mismatch_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "test.xlsx"
+            path.write_bytes(b"local")
+
+            class Drive:
+                def get_file(self, file_id, fields):
+                    return {"id": file_id, "md5Checksum": "0" * 32, "size": str(path.stat().st_size)}
+
+            with self.assertRaisesRegex(RuntimeError, "MD5 不一致"):
+                verify_uploaded_file_metadata(Drive(), "file-1", path)
 
 
 if __name__ == "__main__":
