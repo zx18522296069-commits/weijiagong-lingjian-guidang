@@ -134,11 +134,29 @@ def validate_new_board(
 ) -> dict:
     """
     对一张新板做全量预校验。任何一行失败，则整张板阻断，不产生正式入账流水。
+
+    完整板材号一旦已经存在于永久累计事实中，本函数绝不把同号文件当成另一张新板继续入账。
+    “同号+同内容”的补归档在主流程进入本函数之前处理；能进入这里的同号文件即视为内容冲突。
     """
     today = datetime.now(BEIJING_TZ).date().isoformat()
-    # 板材号允许重复；真正的去重键是“板材号 + 内容指纹”，由主流程在
-    # 全量校验前判断。保留 posted_boards 参数仅兼容既有调用。
     content_fingerprint = board_content_fingerprint(split_payload)
+
+    if board_id in posted_boards:
+        reason = f"同板材号内容冲突：完整板材号={board_id} 已存在正式入账记录，但本次内容指纹不同，禁止作为新板再次累计"
+        return {
+            "ok": False,
+            "error": reason,
+            "anomaly": {
+                "板材号": board_id,
+                "业务日期": today,
+                "订单号": split_payload.get("rows", [{}])[0].get("order", ""),
+                "图号": "",
+                "厚度(mm)": "",
+                "数量": sum(int(r.get("split_quantity", 0)) for r in split_payload.get("rows", [])),
+                "异常类型": "同板材号内容冲突",
+                "说明": f"{reason}；未入账、未归档，文件保留在拆图结果根目录。",
+            },
+        }
 
     matched = []
     try:
@@ -262,7 +280,7 @@ def build_current_state(
         elif processed > 0:
             status = "部分完成"
         else:
-            status = "未开始"
+            status = "未加工"
 
         rows.append({
             **source,
