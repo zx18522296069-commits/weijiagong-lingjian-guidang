@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from modules.drive_manager import FOLDER_MIME, SHORTCUT_MIME
+
 CUMULATIVE_NAME = "累计加工台账.xlsx"
 PENDING_NAME = "当前待加工零件.xlsx"
 
 
 def find_unique_working_file(drive, filename: str) -> dict | None:
-    """按正式文件名在“正在加工”根目录唯一查找；重复时禁止猜测。"""
+    """按正式文件名在“正在加工”根目录唯一查找；文件夹/快捷方式不能冒充正式表。"""
     matches = [
         item
         for item in drive.list_children(drive.working_folder_id)
         if str(item.get("name", "")).strip() == filename
-        and item.get("mimeType") != "application/vnd.google-apps.folder"
+        and item.get("mimeType") not in {FOLDER_MIME, SHORTCUT_MIME}
     ]
     if len(matches) > 1:
         ids = [item.get("id", "") for item in matches]
