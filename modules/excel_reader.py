@@ -288,129 +288,15 @@ def read_split_result(path, *, board_id: str, source_name: str = "") -> dict:
 
 def read_existing_ledger(path) -> dict:
     """
-    读取正式累计台账中的：
-    - 当前累计状态（用于继续累加）
-    - 主表历史零件行（用于订单源退出后永久保留已完成历史）
-    - 加工流水、板材入账、异常历史
+    读取正式累计台账全部永久事实。
+
+    V2 起整单完成订单存放在“已完成订单”页；这里统一复用高速解析器，
+    将“累计加工台账”与“已完成订单”合并恢复为同一份 state/historical_rows。
+    旧的四页台账仍兼容。
     """
-    wb = load_workbook(path, read_only=True, data_only=True)
-    if "累计加工台账" not in wb.sheetnames:
-        raise ValueError("累计加工台账.xlsx 缺少“累计加工台账”工作表")
+    from modules.fast_ledger import read_existing_ledger_fast
 
-    state: dict[tuple, dict] = {}
-    historical_rows: list[dict] = []
-    ws = wb["累计加工台账"]
-    max_row, max_column = _worksheet_bounds(ws)
-    if max_row < 1 or max_column < 1:
-        raise ValueError("累计加工台账.xlsx 的“累计加工台账”工作表为空或无法解析范围")
-    current_order = ""
-    header_cols = None
-
-    for r in range(1, max_row + 1):
-        first = _text(ws.cell(r, 1).value)
-        if first.startswith("订单："):
-            text = first[len("订单："):]
-            current_order = normalize_order_key(text.split("｜", 1)[0].strip())
-            header_cols = None
-            continue
-        if first == "图号":
-            header_cols = _header_map([ws.cell(r, c).value for c in range(1, max_column + 1)])
-            continue
-        if not current_order or not header_cols or not first:
-            continue
-
-        required_headers = [
-            "图号", "厚度(mm)", "坡口", "长(mm)", "宽(mm)", "订单总数量",
-            "零件总重量(t)", "累计已加工", "当前剩余", "待加工重量(t)", "零件状态",
-        ]
-        missing = [name for name in required_headers if name not in header_cols]
-        if missing:
-            raise ValueError(f"累计加工台账主表缺少正式字段: {missing}")
-
-        drawing = normalize_drawing(ws.cell(r, header_cols["图号"]).value)
-        if not drawing:
-            continue
-        thickness = float(_number(ws.cell(r, header_cols["厚度(mm)"]).value, "厚度"))
-        bevel = normalize_bevel(ws.cell(r, header_cols["坡口"]).value)
-        processed = _int_number(ws.cell(r, header_cols["累计已加工"]).value or 0, "累计已加工")
-        board_sources = _text(ws.cell(r, header_cols.get("板材号/加工来源", 0)).value) if header_cols.get("板材号/加工来源") else ""
-        remaining = _int_number(ws.cell(r, header_cols["当前剩余"]).value or 0, "当前剩余")
-
-        key = (current_order, drawing, thickness, bevel)
-        if key in state:
-            raise ValueError(f"累计加工台账主表存在重复业务键: {key}")
-        state[key] = {"processed": processed, "board_sources": board_sources}
-
-        historical_rows.append({
-            "order_raw": current_order,
-            "order": current_order,
-            "drawing": drawing,
-            "thickness": thickness,
-            "bevel": bevel,
-            "length": _number(ws.cell(r, header_cols["长(mm)"]).value, "长(mm)"),
-            "width": _number(ws.cell(r, header_cols["宽(mm)"]).value, "宽(mm)"),
-            "quantity": _int_number(ws.cell(r, header_cols["订单总数量"]).value, "订单总数量"),
-            "total_weight_t": float(_number(ws.cell(r, header_cols["零件总重量(t)"]).value, "零件总重量(t)")),
-            "source_file": "历史累计台账",
-            "order_container_name": "",
-            "source_row": r,
-            "board_sources": board_sources,
-            "processed": processed,
-            "remaining": remaining,
-            "pending_weight_t": float(_number(ws.cell(r, header_cols["待加工重量(t)"]).value or 0, "待加工重量(t)")),
-            "status": _text(ws.cell(r, header_cols["零件状态"]).value),
-        })
-
-    def read_sheet_records(sheet_name: str) -> list[dict]:
-        if sheet_name not in wb.sheetnames:
-            return []
-        sheet = wb[sheet_name]
-        sheet_max_row, sheet_max_column = _worksheet_bounds(sheet)
-        if sheet_max_row < 1 or sheet_max_column < 1:
-            return []
-        headers = [_text(sheet.cell(1, c).value) for c in range(1, sheet_max_column + 1)]
-        records = []
-        for r in range(2, sheet_max_row + 1):
-            values = [sheet.cell(r, c).value for c in range(1, sheet_max_column + 1)]
-            if not any(v not in (None, "") for v in values):
-                continue
-            records.append({headers[i]: values[i] for i in range(len(headers)) if headers[i]})
-        return records
-
-    flows = read_sheet_records("加工流水")
-    board_records = read_sheet_records("板材入账记录")
-    anomalies = read_sheet_records("异常记录")
-    posted_boards = {
-        _text(row.get("板材号"))
-        for row in board_records
-        if _text(row.get("板材号"))
-        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
-    }
-    posted_board_keys = {
-        (_text(row.get("板材号")), _text(row.get("内容指纹")))
-        for row in board_records
-        if _text(row.get("板材号"))
-        and _text(row.get("内容指纹"))
-        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
-    }
-    legacy_posted_boards = {
-        _text(row.get("板材号"))
-        for row in board_records
-        if _text(row.get("板材号"))
-        and not _text(row.get("内容指纹"))
-        and _text(row.get("状态")) not in {"作废", "未入账", "阻断"}
-    }
-
-    return {
-        "state": state,
-        "historical_rows": historical_rows,
-        "flows": flows,
-        "board_records": board_records,
-        "anomalies": anomalies,
-        "posted_boards": posted_boards,
-        "posted_board_keys": posted_board_keys,
-        "legacy_posted_boards": legacy_posted_boards,
-    }
+    return read_existing_ledger_fast(path)
 
 
 def read_excel(path):
