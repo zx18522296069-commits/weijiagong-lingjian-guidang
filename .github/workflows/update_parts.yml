@@ -28,6 +28,7 @@ jobs:
 
     env:
       PYTHONUNBUFFERED: '1'
+      DRIVE_DOWNLOAD_CACHE_DIR: '.cache/drive_files'
       GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
       GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
       GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
@@ -48,6 +49,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Restore Drive incremental cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/drive_files
+          key: drive-files-v1-${{ github.run_id }}
+          restore-keys: |
+            drive-files-v1-
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -64,6 +73,13 @@ jobs:
 
       - name: Run update
         run: python main.py
+
+      - name: Save Drive incremental cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/drive_files
+          key: drive-files-v1-${{ github.run_id }}
 
       - name: Save execution log
         if: always()
