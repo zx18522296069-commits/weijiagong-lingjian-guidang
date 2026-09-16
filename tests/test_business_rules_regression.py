@@ -6,7 +6,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from modules.excel_generator import generate_cumulative_report
+from modules.excel_generator import generate_cumulative_report, generate_pending_report
 from modules.process_parts import build_current_state, validate_new_board
 
 
@@ -34,13 +34,42 @@ class BusinessRulesRegressionTests(unittest.TestCase):
             "base_total_weight_t": 0.3,
         }]}
 
-    def _detail_row(self, output: Path) -> tuple:
-        ws = load_workbook(output)["累计加工台账"]
-        row = next(
-            r for r in range(1, ws.max_row + 1)
-            if ws.cell(r, 1).value == "A1"
+    def _color_source(self):
+        rows = []
+        for drawing, quantity in (
+            ("UNTOUCHED", 3),
+            ("PARTIAL", 3),
+            ("DONE", 2),
+            ("OVER", 2),
+        ):
+            rows.append({
+                "order": "COLOR-ORDER",
+                "drawing": drawing,
+                "thickness": 20.0,
+                "bevel": "",
+                "length": 1000.0,
+                "width": 500.0,
+                "quantity": quantity,
+                "total_weight_t": quantity * 0.1,
+            })
+        return rows
+
+    @staticmethod
+    def _find_row(ws, drawing: str) -> int:
+        return next(
+            row for row in range(1, ws.max_row + 1)
+            if ws.cell(row, 1).value == drawing
         )
-        return ws, row
+
+    @staticmethod
+    def _assert_row_fill(testcase, ws, row: int, expected: str | None):
+        for col in range(1, 13):
+            cell = ws.cell(row, col)
+            if expected is None:
+                testcase.assertIsNone(cell.fill.fill_type)
+            else:
+                testcase.assertEqual(cell.fill.fill_type, "solid")
+                testcase.assertEqual(cell.fill.fgColor.rgb[-6:], expected)
 
     def test_same_full_board_id_with_different_content_is_blocked(self):
         result = validate_new_board(
@@ -64,28 +93,43 @@ class BusinessRulesRegressionTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result.get("error"))
 
-    def test_unprocessed_status_has_no_fill(self):
-        state = build_current_state(self._source(), existing_state={})
-        self.assertEqual(state[0]["status"], "未加工")
-        with tempfile.TemporaryDirectory() as td:
-            output = Path(td) / "status.xlsx"
-            generate_cumulative_report(state, [], [], [], output)
-            ws, row = self._detail_row(output)
-            self.assertTrue(all(ws.cell(row, col).fill.fill_type is None for col in range(1, 13)))
+    def test_all_status_colors_are_identical_in_both_formal_reports(self):
+        source = self._color_source()
+        existing_state = {
+            ("COLOR-ORDER", "PARTIAL", 20.0, ""): {"processed": 1, "board_sources": "#101×1"},
+            ("COLOR-ORDER", "DONE", 20.0, ""): {"processed": 2, "board_sources": "#102×2"},
+            ("COLOR-ORDER", "OVER", 20.0, ""): {"processed": 3, "board_sources": "#103×3"},
+        }
+        state = build_current_state(source, existing_state=existing_state)
+        statuses = {row["drawing"]: row["status"] for row in state}
+        self.assertEqual(statuses, {
+            "UNTOUCHED": "未加工",
+            "PARTIAL": "部分完成",
+            "DONE": "已完成",
+            "OVER": "超加工/待核查",
+        })
 
-    def test_partially_processed_status_is_yellow(self):
-        key = ("ORDER-1", "A1", 20.0, "")
-        state = build_current_state(
-            self._source(),
-            existing_state={key: {"processed": 1, "board_sources": "#100×1"}},
-        )
-        self.assertEqual(state[0]["status"], "部分完成")
+        expected_colors = {
+            "UNTOUCHED": None,
+            "PARTIAL": "FFF2CC",
+            "DONE": "E2F0D9",
+            "OVER": "F4CCCC",
+        }
+
         with tempfile.TemporaryDirectory() as td:
-            output = Path(td) / "status.xlsx"
-            generate_cumulative_report(state, [], [], [], output)
-            ws, row = self._detail_row(output)
-            colors = [ws.cell(row, col).fill.fgColor.rgb[-6:] for col in range(1, 13)]
-            self.assertEqual(colors, ["FFF2CC"] * 12)
+            cumulative = Path(td) / "累计加工台账.xlsx"
+            pending = Path(td) / "当前待加工零件.xlsx"
+            generate_cumulative_report(state, [], [], [], cumulative)
+            generate_pending_report(state, pending)
+
+            for path, sheet_name in (
+                (cumulative, "累计加工台账"),
+                (pending, "当前待加工零件"),
+            ):
+                ws = load_workbook(path)[sheet_name]
+                for drawing, expected in expected_colors.items():
+                    row = self._find_row(ws, drawing)
+                    self._assert_row_fill(self, ws, row, expected)
 
     def test_overprocessing_keeps_negative_remaining(self):
         key = ("ORDER-1", "A1", 20.0, "")
