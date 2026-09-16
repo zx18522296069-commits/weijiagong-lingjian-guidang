@@ -1,11 +1,6 @@
 name: 未加工零件自动更新
 
 on:
-  schedule:
-    - cron: '0 9 * * *'
-    - cron: '0 4 * * *'
-  # schedule 不是本仓库固定规则；当前值来自生产控制台“定时设置”。
-  # 后续启停和执行时间统一由控制台写入/移除本段。
   workflow_dispatch:
     inputs:
       mode:
@@ -16,6 +11,16 @@ on:
         options:
           - test
           - production
+      trigger_source:
+        description: '触发来源（控制台/人工）'
+        required: false
+        default: 'manual'
+        type: string
+      scheduled_for:
+        description: '控制台计划时间，仅用于追踪和防重复'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -43,9 +48,9 @@ jobs:
       RESULT_FOLDER_ID: '1PGM1ZEbHk2v3CAZPfwHdqC2EV_kHNzJH'
       ARCHIVE_FOLDER_ID: '1YZ8CuDivBb4xCJz6qQvpspLmpTQgNUAz'
 
-      # 控制台手动执行固定传 production；直接在 GitHub 手动执行默认 test。
-      # 控制台定时启用时，schedule 事件自动按正式生产运行。
-      TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'test' && 'true' || 'false' }}
+      # 前端“立即执行”和控制台后台调度都通过 workflow_dispatch 调用。
+      # GitHub 仓库自身不维护任何固定业务 cron。
+      TEST_MODE: ${{ inputs.mode == 'test' && 'true' || 'false' }}
 
     steps:
       - name: Checkout
