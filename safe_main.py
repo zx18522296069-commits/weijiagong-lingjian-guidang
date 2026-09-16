@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -39,6 +40,31 @@ _ROW_FIELDS = (
     "pending_weight_t",
     "status",
 )
+
+_LEGACY_BLOCK_RE = re.compile(r"^板材\s+(.+?)\s+阻断：")
+_STRUCTURED_BLOCK_RE = re.compile(
+    r"^板材处理结果｜文件=[^｜]+｜板材=([^｜]+)｜状态=未累计、未记录｜原因=(.+?)｜处理建议="
+)
+
+
+def legacy_block_compat_message(message: object, seen_boards: set[str]) -> str | None:
+    """为旧结果解析器补一条标准“板材 X 阻断”日志，且不重复输出。"""
+    text = str(message)
+    legacy = _LEGACY_BLOCK_RE.match(text)
+    if legacy:
+        seen_boards.add(legacy.group(1).strip())
+        return None
+
+    structured = _STRUCTURED_BLOCK_RE.match(text)
+    if not structured:
+        return None
+
+    board_id = structured.group(1).strip()
+    reason = structured.group(2).strip()
+    if not board_id or board_id in seen_boards:
+        return None
+    seen_boards.add(board_id)
+    return f"板材 {board_id} 阻断：{reason}"
 
 
 def _scalar(value):
@@ -122,6 +148,8 @@ def run() -> None:
     business_main.read_existing_ledger = read_existing_ledger_fast
     original_read_existing = read_existing_ledger_fast
     original_write_formal = business_main.write_formal_file
+    original_warning = business_main.logger.warning
+    seen_legacy_block_boards: set[str] = set()
     context: dict[str, object] = {
         "existing": None,
         "business_changed": None,
@@ -161,9 +189,19 @@ def run() -> None:
 
         return original_write_formal(drive_obj, current, local_path)
 
+    def compatible_warning(message, *args, **kwargs):
+        original_warning(message, *args, **kwargs)
+        compat = legacy_block_compat_message(message, seen_legacy_block_boards)
+        if compat:
+            original_warning(compat)
+
     business_main.read_existing_ledger = capture_existing
     business_main.write_formal_file = guarded_write_formal
-    business_main.run()
+    business_main.logger.warning = compatible_warning
+    try:
+        business_main.run()
+    finally:
+        business_main.logger.warning = original_warning
 
 
 if __name__ == "__main__":
