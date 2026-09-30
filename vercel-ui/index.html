@@ -150,7 +150,15 @@ async function loadResult(task){
 });
 $('logout').onclick=()=>{sessionStorage.removeItem(store);$('login').classList.remove('hidden')};
 $('loginForm').onsubmit=async e=>{e.preventDefault();const v=$('key').value.trim();if(!v)return;sessionStorage.setItem(store,v);$('loginNotice').className='notice';$('loginNotice').textContent='正在验证…';try{await Promise.all([refresh('parts',true),refresh('split',true)]);$('login').classList.add('hidden');$('key').value='';$('loginNotice').className='notice hidden';note('parts','控制服务已连接','ok');note('split','控制服务已连接','ok')}catch(err){authFail(err.message)}};
-if(key()){$('login').classList.add('hidden');refresh('parts',true);refresh('split',true)}else{$('login').classList.remove('hidden')}
+if(key()){
+  $('login').classList.add('hidden');
+  Promise.all([refresh('parts',true),refresh('split',true)]).then(()=>{
+    note('parts','控制服务已连接','ok');
+    note('split','控制服务已连接','ok');
+  });
+}else{
+  $('login').classList.remove('hidden');
+}
 setInterval(()=>{if(key()){refresh('parts',true);refresh('split',true)}},10000);
 </script>
 </body>
