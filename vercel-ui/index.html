@@ -85,7 +85,7 @@
 </div>
 
 <script>
-const API='https://production-control-api.zx18522296069.chatgpt.site';
+const API_PROXY='/api/proxy';
 const store='control-panel-key';
 const active=new Set(['in_progress','queued','requested','waiting']);
 const statusMap={success:'成功',partial:'部分完成',failure:'失败',cancelled:'已取消',in_progress:'运行中',queued:'排队中',requested:'已提交',waiting:'等待中',no_runs:'暂无记录',api_error:'读取失败',unknown:'未知'};
@@ -99,7 +99,7 @@ function fmt(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.get
 function note(task,msg,type=''){$('notice-'+task).className='notice '+type;$('notice-'+task).textContent=msg}
 function authFail(msg){sessionStorage.removeItem(store);$('login').classList.remove('hidden');$('loginNotice').className='notice error';$('loginNotice').textContent=msg||'操作口令无效'}
 async function req(path,opt={}){
-  let res;try{res=await fetch(API+path,{...opt,headers:{'Content-Type':'application/json','X-Control-Key':key(),...(opt.headers||{})}})}catch{throw new Error('控制服务未连接')}
+  let res;try{res=await fetch(API_PROXY+'?path='+encodeURIComponent(path),{...opt,headers:{'Content-Type':'application/json','X-Control-Key':key(),...(opt.headers||{})}})}catch{throw new Error('控制服务未连接')}
   const data=await res.json().catch(()=>({}));
   if(!res.ok||data.status==='error'){const m=data.detail||data.message||('请求失败（'+res.status+'）');if(res.status===401)authFail(m);throw new Error(m)}
   return data;
